@@ -39,7 +39,7 @@ The status of each part of the server for Hay Day 1.43.150 (build 1598).
 | Farm migration between server versions | ❌ | Existing farms are never migrated |
 | Multi-device support | ❌ | No way at the moment to authenticate multiple devices for the same account |
 | Disconnect message ("another device is connecting") (25892) | 🟡 | Builder exists; never sent automatically. Unlikely to be implemented soon due to the difficulty of having multi device support for one farm |
-| Rotating buildings | ❌ | Command is likely 53, not confirmed. The server does not acknowledge it. |
+| Flipping objects | ✅ | |
 
 ## Gameplay commands
 
@@ -65,7 +65,7 @@ saved farm. Unsupported commands are logged with a warning and skipped.
 | Roadside shop | 🟡 | 30, 31, 32, 36, 37 | AI purchases recognized but not applied |
 | Buying missing goods with diamonds | 🟡 | 39 | |
 | Mystery boxes | 🟡 | 44, 45 | |
-| Rotating buildings | ❌ | 53? | |
+| Flipping objects | 🟡 | 53 | Persists mirrored orientation; live reconnect validation pending |
 | Mine | 🟡 | 64 | Consumes a tool; ore yields are not applied (they come from the client's shared RNG) |
 | Tom (hire, offers) | 🟡 | 68–74 | |
 | Train | 🟡 | 90 | |

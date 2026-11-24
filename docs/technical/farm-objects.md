@@ -1,0 +1,71 @@
+# Farm object state
+
+Notes on fields the client saves in the farm JSON (blob `c`, `Objects`) and
+how the server must write them. Static analysis of the x86 `libg.so` unless
+marked live-tested. See also
+[end-client-turn-commands.md](end-client-turn-commands.md).
+
+## Production queue entries
+
+Machines keep `ProductionList` with `Productions` (queued or running) and
+`FinishedProductions`. Each queued entry has these keys:
+
+| Key | Meaning |
+|---|---|
+| `ID` | Product data ID |
+| `Timer` | Production timer |
+| `HelperType` | Which helper queued the item. **Omit the key for items the player queued.** |
+| `BoosterID` | Booster applied, if any. Omit when none. |
+| `ProductionTime` | Full production time, seconds |
+| `ReducedProductionTime` | Time after reductions, seconds |
+
+### HelperType
+
+- Loader (`0x5fb406`): reads `HelperType` and accepts only 0 or 1; any other
+  value keeps the default.
+- Saver (`0x2eb3fa`): writes `HelperType` only when the field is not −1, so
+  −1 (key absent) means "queued by the player".
+- Helpers (texts.csv): `TID_HELPER_CARETAKER` = **Rose**; the other helper is
+  Ernest. Value 0 is Rose. The mapping of 1 to Ernest is inferred.
+
+Writing `"HelperType": 0` makes the client show Rose's portrait on items the
+player queued (live-observed). The server's `start_production`
+(`src/replay/production.rs`) omits both keys for player-queued items with no
+booster. The client saves `BoosterID` only when a booster is present
+(`0x2eb436`). Existing saved queue entries are not rewritten.
+
+## Mirrored objects (command 53)
+
+Objects carry `"Mirrored": true` when flipped; the key is absent otherwise
+(Greg's farm uses it). Flipping swaps the footprint's width and height.
+
+## Mystery boxes (commands 44, 45, 48)
+
+- Class 53, data rows in `mystery_boxes.csv`; object ID = `5300000 + row`
+  (Box1 = 5300000, a bronze box with 1 Bolt). Boxes are 2×2 tiles.
+- The reward is rolled when the box spawns and stored on the box (amount at
+  object +0x50, item at +0x6c). Opening (44) grants that stored reward;
+  nothing is rolled at open time. The JSON key names for these two fields
+  are **not yet known**.
+- The client spawns boxes itself during play, probably seeded by the
+  avatar's `MysteryBoxRandomSeed`; the server does not simulate this, so a
+  box spawned on the client is missing from the stored farm and command 44
+  will not find it.
+- Current server behaviour (`src/replay/extended.rs`): 44 removes the box
+  without granting anything; 45 removes it.
+
+### Finding the reward keys
+
+1. Add a bare box to a test account's stored farm through the admin API
+   (`PUT /accounts/<id>/home`), e.g. `{"ID":5300000,"X":20,"Y":20}` on free
+   ground.
+2. Log in and check it appears. If the client rejects it, the reward keys
+   are required and must be found statically.
+3. Dump the farm from the running client with
+   `hayday-research/scratch/r30-dump.sh`. The client's serializer writes
+   every field, so the box object shows the key names for its item and
+   amount.
+4. Open the box and compare the reward with the dumped values.
+
+Then command 44 can read those keys, add the amount of that item to the
+avatar stats, and remove the box.

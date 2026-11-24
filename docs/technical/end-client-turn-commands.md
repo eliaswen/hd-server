@@ -27,7 +27,10 @@ Commands sent in [EndClientTurn (11292)](messages.md#endclientturn-11292) for Ha
 | 40, 42 | Medium | Complete visitor deal; tap ambient animal | — |
 | 41 | High | Collect pending truck reward | VInt tick |
 | 43 | High | Decline visitor deal | VInt visitor data ID, VInt tick |
-| 44–45, 47 | Medium | Open or discard mystery box; buy from AI roadside shop | — |
+| 44 | Medium | Open a mystery box (class 53, `mystery_boxes.csv`). After a check (`0x57c6e8`), `0x2dc6d2` grants the box's contents, which were rolled when the box spawned (amount at box +0x50, item at box +0x6c), and removes the box. Analytics label "mystery box opened". The server needs the box's saved reward fields to replay it | VInt box instance ID, VInt tick |
+| 45 | Medium | Discard a mystery box without opening it (`0x302372`, `0x3ecff6`). Analytics label "mystery box discarded" | VInt box instance ID, VInt tick |
+| 47 | Medium | Buy from AI roadside shop | — |
+| 48 | Low | Mystery-box action: looks up a mystery box (class 53, `mystery_boxes.csv`) by instance ID, checks its state (`0x1fc304`), then sets box +0x5c = 3 and +0x60 = 45, probably starting the open/reveal animation that precedes 44. Vtable 0xb26040, execute 0x5fe744 | VInt box instance ID, VInt tick |
 | 49–52 | Medium | Set app rating state; spawn ambient animal; claim achievement; buy advertisement token | — |
 | 53 | Medium | Flip (mirror) an object in edit mode: toggles its flipped flag, which swaps the footprint's width and height; a non-square object is removed from and re-placed on the grid. Vtable 0xb3af90, execute 0x1ebb7a | VInt target instance ID, VInt tick |
 | 55–58 | Medium | Complete boat order; fill crate; discard order; speed up boat | — |
@@ -38,4 +41,4 @@ Commands sent in [EndClientTurn (11292)](messages.md#endclientturn-11292) for Ha
 | 93–97 | Medium | Collect/remove object; offer notification; Facebook ad state; buy mastery star or tool offer | — |
 | 131 | High | Toggle settings/notification bit | VInt data ID, VInt table type, packed bool set, VInt tick |
 
-The command count and schemas determine boundaries: commands have no general length prefix. The server retains the raw remainder if it cannot decode a command. Some decoded effects remain unmodeled or approximate, including command 53 and visitor offers; see [replay/mod.rs](../../src/replay/mod.rs) and adjacent modules for current behavior.
+The command count and schemas determine boundaries: commands have no general length prefix. The server retains the raw remainder if it cannot decode a command. Command 53 toggles the target's persisted `Mirrored` flag; live reconnect validation is pending. Some decoded effects remain unmodeled or approximate, including visitor offers; see [replay/mod.rs](../../src/replay/mod.rs) and adjacent modules for current behavior.
