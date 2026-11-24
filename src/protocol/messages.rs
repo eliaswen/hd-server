@@ -866,6 +866,7 @@ impl TurnCommand {
             50 => "spawn ambient animal",
             51 => "claim achievement",
             52 => "buy advertisement token",
+            53 => "flip object",
             55 => "complete boat order",
             56 => "fill boat crate",
             57 => "discard boat order",

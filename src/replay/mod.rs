@@ -528,6 +528,22 @@ impl Replay {
                     40 => self.complete_visitor(home, int(0)?)?,
                     // : pay and clear the persisted truck reward stash once.
                     41 => self.collect_order_reward(home)?,
+                    53 => {
+                        let i = self.position(int(0)?)?;
+                        let object = self.objects[i]
+                            .value
+                            .as_object_mut()
+                            .context("invalid farm object")?;
+                        match object.get("Mirrored") {
+                            None | Some(Value::Bool(false)) => {
+                                object.insert("Mirrored".into(), json!(true));
+                            }
+                            Some(Value::Bool(true)) => {
+                                object.remove("Mirrored");
+                            }
+                            _ => anyhow::bail!("invalid object mirrored flag"),
+                        }
+                    }
                     3 => {
                         // Captured move confirmed by the player: instance,
                         // fixed-point delta X/Y, flag, old X/Y, data ID, tick.
@@ -998,6 +1014,23 @@ pub(crate) mod tests {
             fields,
             raw: vec![],
         }
+    }
+    #[test]
+    fn flip_object_is_saved_and_toggles_after_reload() {
+        let mut home = crate::game::starter::new_home().unwrap();
+        let mut state = Replay::new(&home).unwrap();
+        let instance = state.objects[0].instance;
+        let original = state.objects[0].value.clone();
+        assert!(apply(&mut state, &mut home, 304, &[vec![53, instance, 1]]).is_empty());
+        assert_eq!(home.c["Objects"][0]["Mirrored"], true);
+        let saved = serde_json::to_vec(&home).unwrap();
+        let mut home: HomeData = serde_json::from_slice(&saved).unwrap();
+        let mut state = Replay::new(&home).unwrap();
+        assert!(apply(&mut state, &mut home, 607, &[vec![53, instance, 2]]).is_empty());
+        assert_eq!(home.c["Objects"][0], original);
+        let before = home.clone();
+        assert!(!apply(&mut state, &mut home, 910, &[vec![53, 99999999, 3]]).is_empty());
+        assert_eq!(home, before);
     }
     #[test]
     fn construction_selector_and_bakery_purchase_finish_claim() {
