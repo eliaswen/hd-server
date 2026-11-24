@@ -172,7 +172,7 @@ impl Replay {
             remove(&mut home.avatar_stats, id, amount)?;
         }
         let seconds = duration(row)?;
-        let entry = json!({"ID":product,"Timer":timers::new(seconds),"HelperType":0,"BoosterID":0,
+        let entry = json!({"ID":product,"Timer":timers::new(seconds),
             "ProductionTime":seconds,"ReducedProductionTime":seconds});
         queue(&mut self.objects[i].value)?["Productions"]
             .as_array_mut()
@@ -439,6 +439,10 @@ mod tests {
         .is_empty());
         assert!(apply(&mut state, &mut home, 4500, &[]).is_empty());
         let entries = &object(&home, 600000)["ProductionList"]["Productions"];
+        for entry in entries.as_array().unwrap() {
+            assert!(entry.get("HelperType").is_none());
+            assert!(entry.get("BoosterID").is_none());
+        }
         assert_eq!(timers::remaining(&entries[0]["Timer"]), 2273);
         assert_eq!(timers::remaining(&entries[1]["Timer"]), 4545);
         assert!(apply(&mut state, &mut home, 9000, &[]).is_empty());
@@ -456,6 +460,11 @@ mod tests {
         home.timer_saved_at_ms = Some(1000);
         let saved = serde_json::to_vec(&home).unwrap();
         let loaded: HomeData = serde_json::from_slice(&saved).unwrap();
+        let entries = &object(&loaded, 600000)["ProductionList"]["Productions"];
+        for entry in entries.as_array().unwrap() {
+            assert!(entry.get("HelperType").is_none());
+            assert!(entry.get("BoosterID").is_none());
+        }
         let elapsed = elapsed_home(loaded.clone(), 301000);
         assert_eq!(serde_json::to_vec(&loaded).unwrap(), saved);
         assert!(object(&elapsed, 600000)["ProductionList"]["Productions"]
