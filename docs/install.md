@@ -64,15 +64,16 @@ Keep the key file. If it changes, every client has to be patched again.
 
 The client opens two connections:
 
-1. An HTTP request for `/env_settings` to `gamea.haydaygame.com:8080`. Point
-   this name at the server's HTTP listener (DNS, hosts file), or set the server
-   as the device's HTTP proxy: proxy-form requests are accepted.
+1. An HTTP request for `/env_settings`. This file contains the `serverHost` and `serverPort` for the game connection. The
+   server listens on `http_listen` (default `0.0.0.0:8080`). By default, the game client connects to `http://gamea.haydaygame.com:8080`.
+   With [hd-patcher](https://github.com/eliaswen/hd-patcher), you can configure the client to use the server's HTTP endpoint directly.
+   Otherwise, you can use DNS, HTTP proxy or a hosts file to redirect `gamea.haydaygame.com` to the server's IP address and port.
 2. A TCP connection to the `serverHost` returned by bootstrap, which is
    `game_host`, on port 9339.
 
-The client refuses private IPv4 ranges (such as `10.0.0.0/8` and
-`192.168.0.0/16`) for the game connection. Use a public address, or one from
-the benchmarking range `198.18.0.0/15` that the device can reach. Assigning
+By default, the client refuses private IPv4 ranges (such as `10.0.0.0/8` and
+`192.168.0.0/16`) for the game connection. This can changed with [hd-patcher](https://github.com/eliaswen/hd-patcher)'s `--allow-local-ranges` option.
+Otherwise, you'll need to use a public address, or one from the benchmarking range `198.18.0.0/15` that the device can reach. Assigning
 that address to an interface on the host, or routing it, is up to you.
 
 ## 6. Play
