@@ -1,0 +1,23 @@
+[package]
+name = "hd-server"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+description = "A custom server for Hay Day 1.43.150: HTTP bootstrap, encrypted login and farm state"
+
+[dependencies]
+anyhow = "1.0.105"
+clap = { version = "4.5.23", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "fs", "sync", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+# Retain the verified minimal home's JSON ordering and level-9 zlib bytes.
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serde = { version = "1.0.229", features = ["derive"] }
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
+blake2 = "0.11"
+x25519-dalek = "3"
+poly1305 = "0.9"
+getrandom = "0.4"
+toml = "1"

@@ -1,0 +1,8 @@
+/target
+/dumps
+/data
+*.apk
+*.keystore
+__pycache__/
+config.toml
+resources
