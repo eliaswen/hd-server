@@ -34,6 +34,41 @@ player queued (live-observed). The server's `start_production`
 booster. The client saves `BoosterID` only when a booster is present
 (`0x2eb436`). Existing saved queue entries are not rewritten.
 
+## Truck order board (object 3200000)
+
+`Seed` plus nine `Orders` slots. An active order has `Lvl`, `Cash`, `Exp`,
+`CashExpMultiplier`, `Datas`, `Amounts` and `Receiver`; an empty slot has
+`Lvl` and `Timer`.
+
+- **`Receiver` is a global ID**, `3400000 + row` of `orders.csv` (kind 34),
+  as in every client-written farm we have. Writing the bare row index makes
+  the client show every server-generated order as "Kindergarten" (row 0)
+  (live-observed). The client picks free receivers by `Receiver % 10`, so
+  both forms pick the same receivers; only the display is wrong.
+- **Generation (live-tested):** the server's port of the client generator
+  produced the same items, amounts, coins and XP as the client in-session
+  for three completions (28) and one trash followed by a diamond speed-up
+  (27, 29). **The receiver differs**: with seed −1056698259, active
+  receivers {1, 2, 3} and the completed order's receiver 8, the server
+  picked 8 (Frank's Factory) and the client 5 (Mike's Mill). Only receiver
+  exclusion sets such as {0,1,2,3}, {1,2,3,4} or {0,1,2,3,8} reproduce the
+  client's pick, so the client's "available receivers" list (`0x63bacc`)
+  is built differently from the server's (which excludes only the other
+  active orders). Rewards are unaffected, but the receiver shown in-session
+  changes to the server's pick at the next login. Data points (seed before
+  generation → client pick, server pick; other active receivers 1, 2, 3 in
+  both): −1056698259 → 5 vs 8; −1086256922 → 3 vs 6. In the second case the
+  client picked a receiver that was already active, so it does not simply
+  exclude the other active orders. `0x63bacc` reads each slot's receiver
+  from order +0x44 (data pointer, `id % 100000`) for slots whose +0x14 is
+  non-zero; what +0x14 is, and which orders it covers, is the open point.
+- **Pending truck reward:** the client keeps the reward of the last
+  completed order until the next completion (28) or collection (41). The
+  server cannot send it in the client's format (key unknown), so a stash
+  from a previous session exists only on the server: the client does not pay
+  it, the server does at the next 28/41, and the HUD jumps to the server's
+  totals on the next login (live-observed: +76 coins, +12 XP).
+
 ## Mirrored objects (command 53)
 
 Objects carry `"Mirrored": true` when flipped; the key is absent otherwise

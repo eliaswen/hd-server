@@ -81,6 +81,9 @@ pub(super) fn normalize_empty_timers(orders: &mut [Value]) {
         }
     }
 }
+/// Order receivers are saved as global IDs (`orders.csv`, kind 34), as the
+/// client writes them; a bare row index displays as receiver row 0.
+const RECEIVER_BASE: u64 = 3_400_000;
 fn receiver(row: &Row) -> Result<Option<usize>> {
     row.get("OrderReceiver")
         .filter(|s| !s.is_empty())
@@ -122,7 +125,10 @@ fn generate(
     let mut recv = if available.is_empty() {
         0
     } else {
-        available[rng.index(available.len())?]
+        // 0x63bacc passes the random index itself to the receiver table, not
+        // the free receiver at that index: the free list only sets the bound
+        // (live-verified with GDB). The pick can repeat an active receiver.
+        rng.index(available.len())?
     };
     let cem = number(lv, "CashExpMultiplier")? as i32;
     let shift = if cem > 0 {
@@ -251,18 +257,41 @@ fn generate(
     Ok((
         json!({"Lvl":level,"Cash":split(cash,100+shift)?,"Exp":split(xp,100-shift)?,
         "CashExpMultiplier":shift,"Datas":items.iter().map(|(id,_)| id).collect::<Vec<_>>(),
-        "Amounts":items.iter().map(|(_,n)| n).collect::<Vec<_>>(),"Receiver":recv}),
+        "Amounts":items.iter().map(|(_,n)| n).collect::<Vec<_>>(),"Receiver":RECEIVER_BASE+recv as u64}),
         is_special,
     ))
 }
 
+/// The client keeps the uncollected truck reward on the truck (object
+/// 200000): `State` 3 with `Cash`/`Exp`; after collection `State` 1 and no
+/// reward keys (live GDB farm dumps).
+fn set_truck_reward(objects: &mut Vec<Value>, reward: Option<&Value>) {
+    // Stored farms usually lack the truck: the client creates it at load at
+    // this position (live dumps). A pending reward needs it present.
+    if reward.is_some() && !objects.iter().any(|o| o["ID"] == 200000) {
+        objects.push(json!({"ID":200000,"X":17,"Y":21,"State":1,"VoucherCount":1}));
+    }
+    for truck in objects.iter_mut().filter(|o| o["ID"] == 200000) {
+        let Some(truck) = truck.as_object_mut() else { continue };
+        match reward {
+            Some(r) => {
+                truck.insert("State".into(), json!(3));
+                truck.insert("Cash".into(), r["Cash"].clone());
+                truck.insert("Exp".into(), r["Exp"].clone());
+            }
+            None => {
+                truck.insert("State".into(), json!(1));
+                truck.remove("Cash");
+                truck.remove("Exp");
+            }
+        }
+    }
+}
 /// Prepare only the normal own-home copy. Persistence happens on the next turn.
 /// Verified board position; seed 0 matches the initial client-created board.
 /// Other client-created special objects remain untouched.
 pub(crate) fn prepare(mut home: HomeData) -> Result<HomeData> {
-    if home.replay_state["OrderReward"].is_object() {
-        tracing::warn!("pending truck reward retained server-side across reload; client payout-stash JSON mapping is unverified; collection 41 or next 28 will pay it");
-    }
+    let pending = home.replay_state["OrderReward"].clone();
     let objects = home
         .c
         .get_mut("Objects")
@@ -271,6 +300,17 @@ pub(crate) fn prepare(mut home: HomeData) -> Result<HomeData> {
     if !objects.iter().any(|o| o["ID"] == 3200000) {
         objects.push(json!({"ID":3200000,"X":14,"Y":19,"Seed":0,"Orders":vec![json!({"Lvl":1,"Timer":{}});9]}));
     }
+    // Boards saved by older server builds hold bare receiver row indices.
+    for board in objects.iter_mut().filter(|o| o["ID"] == 3200000) {
+        if let Some(orders) = board.get_mut("Orders").and_then(Value::as_array_mut) {
+            for order in orders {
+                if let Some(id) = order["Receiver"].as_u64().filter(|&id| id < RECEIVER_BASE) {
+                    order["Receiver"] = json!(RECEIVER_BASE + id);
+                }
+            }
+        }
+    }
+    set_truck_reward(objects, pending.is_object().then_some(&pending));
     let mut replay = Replay::new(&home)?;
     replay.fill_orders(&mut home)?;
     replay.save_objects(&mut home);
@@ -485,6 +525,7 @@ impl Replay {
             )?;
         }
         self.extra["OrderReward"] = json!({"Cash":order["Cash"],"Exp":order["Exp"]});
+        self.sync_truck()?;
         self.objects[index].value["Orders"][slot] =
             empty_slot(home.avatar_stats.get(&1900002).copied().unwrap_or(1));
         home.special_order_slots.remove(&slot);
@@ -509,9 +550,24 @@ impl Replay {
                 reward["Exp"].as_u64().unwrap_or(0).try_into()?,
             )?;
             self.extra.as_object_mut().unwrap().remove("OrderReward");
+            self.sync_truck()?;
         }
         Ok(())
     }
+    /// Mirror the server's pending reward onto the truck object.
+    fn sync_truck(&mut self) -> Result<()> {
+        let reward = self.extra.get("OrderReward").filter(|v| v.is_object()).cloned();
+        if reward.is_some() && !self.objects.iter().any(|o| o.value["ID"] == 200000) {
+            self.create(json!({"ID":200000,"X":17,"Y":21,"State":1,"VoucherCount":1}))?;
+        }
+        for o in self.objects.iter_mut().filter(|o| o.value["ID"] == 200000) {
+            let mut one = vec![o.value.clone()];
+            set_truck_reward(&mut one, reward.as_ref());
+            o.value = one.pop().unwrap();
+        }
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]
@@ -713,6 +769,27 @@ mod tests {
         assert_eq!(home.predefined_orders, 1);
     }
     #[test]
+    fn receivers_are_saved_as_global_ids_and_old_indices_migrate() {
+        let mut home = crate::game::starter::new_home().unwrap();
+        home.avatar_stats.insert(1900002, 10);
+        let home = prepare(home).unwrap();
+        let receivers: Vec<u64> = board(&home)["Orders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| o["Receiver"].as_u64())
+            .collect();
+        assert!(!receivers.is_empty());
+        assert!(receivers.iter().all(|&r| (3_400_000..3_400_010).contains(&r)));
+        let mut old = home.clone();
+        for o in old.c["Objects"].as_array_mut().unwrap() {
+            if o["ID"] == 3200000 {
+                o["Orders"][0]["Receiver"] = json!(7);
+            }
+        }
+        assert_eq!(board(&prepare(old).unwrap())["Orders"][0]["Receiver"], 3_400_007);
+    }
+    #[test]
     fn complete_refill_persist_and_collect_never_pay_twice() {
         let mut home = crate::game::starter::new_home().unwrap();
         home.avatar_stats.insert(1900002, 4);
@@ -747,6 +824,12 @@ mod tests {
         assert_eq!(home.avatar_stats[&1900003], 0);
         assert_eq!(home.avatar_stats[&1900000], cash);
         assert!(home.replay_state["OrderReward"].is_object());
+        let truck = |home: &HomeData| {
+            home.c["Objects"].as_array().unwrap().iter().find(|o| o["ID"] == 200000).unwrap().clone()
+        };
+        assert_eq!(truck(&home)["State"], 3);
+        assert_eq!(truck(&home)["Cash"], order["Cash"]);
+        assert_eq!(truck(&home)["Exp"], order["Exp"]);
         let after = home.clone();
         assert_eq!(
             state.apply(&mut home, &EndClientTurn::parse(&turn).unwrap(), &turn),
@@ -756,6 +839,7 @@ mod tests {
         home =
             prepare(serde_json::from_slice(&serde_json::to_vec(&home).unwrap()).unwrap()).unwrap();
         assert_eq!(home.avatar_stats[&1900000], cash);
+        assert_eq!(truck(&home)["Cash"], order["Cash"]);
         state = Replay::new(&home).unwrap();
         let collect = crate::replay::tests::turn(11, &[vec![41, 11]]);
         assert!(state
@@ -771,6 +855,8 @@ mod tests {
             home.avatar_stats[&1900000],
             cash + order["Cash"].as_u64().unwrap() as u32
         );
+        assert_eq!(truck(&home)["State"], 1);
+        assert!(truck(&home).get("Cash").is_none());
         let paid = home.avatar_stats.clone();
         let again = crate::replay::tests::turn(12, &[vec![41, 12]]);
         state.apply(&mut home, &EndClientTurn::parse(&again).unwrap(), &again);
