@@ -4,9 +4,9 @@
 
 use std::{collections::BTreeMap, io::Write};
 
-use anyhow::{ensure, Context, Result};
-use flate2::{write::ZlibEncoder, Compression, Decompress, FlushDecompress, Status};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, bail, ensure};
+use flate2::{Compression, Decompress, FlushDecompress, Status, write::ZlibEncoder};
+use serde_json::{Value, json};
 
 use super::stream::{Reader, Writer};
 
@@ -36,9 +36,24 @@ pub trait Message: Sized {
     }
 }
 
-/// 11489: requested farm name. The response type and body are unconfirmed.
+/// 11489: requested farm name. The client enforces neither emptiness nor
+/// `MaxFarmNameLength`, so [`ChangeHomeName::validate`] does that.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeHomeName(pub String);
+
+/// `MaxFarmNameLength` in game_config.csv.
+pub const MAX_FARM_NAME_CHARS: usize = 25;
+
+impl ChangeHomeName {
+    /// The name to store, trimmed, or `None` when it must be rejected.
+    pub fn validate(&self) -> Option<String> {
+        let name = self.0.trim();
+        (!name.is_empty()
+            && name.chars().count() <= MAX_FARM_NAME_CHARS
+            && !name.chars().any(char::is_control))
+        .then(|| name.to_owned())
+    }
+}
 
 impl Message for ChangeHomeName {
     const TYPE: u16 = 11489;
@@ -46,12 +61,31 @@ impl Message for ChangeHomeName {
         w.string(&self.0);
     }
     fn decode(r: &mut Reader) -> Result<Self> {
-        let name = r.string()?.context("missing farm name")?;
-        ensure!(
-            !name.trim().is_empty() && !name.chars().any(char::is_control),
-            "invalid farm name"
-        );
-        Ok(Self(name))
+        Ok(Self(r.string()?.context("missing farm name")?))
+    }
+}
+
+/// 21608: ChangeHomeNameResponseMessage, one VInt result code (decoder 0x1D7F26).
+/// On success the client commits its pending name to avatar +0x10.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeHomeNameResponse {
+    Failed = 0,
+    Ok = 1,
+    BadWord = 2,
+}
+
+impl Message for ChangeHomeNameResponse {
+    const TYPE: u16 = 21608;
+    fn encode(&self, w: &mut Writer) {
+        w.vint(*self as u32);
+    }
+    fn decode(r: &mut Reader) -> Result<Self> {
+        Ok(match r.vint()? {
+            0 => Self::Failed,
+            1 => Self::Ok,
+            2 => Self::BadWord,
+            code => bail!("unknown ChangeHomeNameResponse code {code}"),
+        })
     }
 }
 
@@ -569,6 +603,12 @@ const OWN_HOME_AVATAR_VECTOR_END: usize = OWN_HOME_AVATAR_VECTOR_OFFSET + 1;
 // Layout helpers derive bitset positions from the fixed phase-B arrays instead
 // of treating 26017 bytes as a hand-maintained blob.
 const OWN_HOME_AVATAR_START: usize = 24;
+/// BE32 length of the avatar's farm-name string (avatar +0x10, read at
+/// 0x446ab8). The prefix models it as a 4-byte null-or-empty placeholder; a
+/// real name is spliced in on the wire. Null (`ffffffff`) keeps the NameFarm
+/// tutorial step (3600017) pending; any non-null string completes it.
+const OWN_HOME_NAME_OFFSET: usize = 4;
+const OWN_HOME_NAME_END: usize = OWN_HOME_NAME_OFFSET + 4;
 fn own_home_bitset_offset(kind: u32) -> usize {
     let mut offset = OWN_HOME_AVATAR_START;
     for (t, _, _, _, count) in crate::game::starter::layout() {
@@ -699,6 +739,8 @@ pub struct OwnHomeData {
     pub fields_unlocked: u32,
     /// Six fixed-width BE32 words for tutorial data type 36.
     pub tutorial_words: [u32; 6],
+    /// Farm name; `None` is sent as a null string.
+    pub farm_name: Option<String>,
     /// Count of the unknown vector at wire avatar +0x408; only zero is supported.
     /// This is not XP and has no confirmed gameplay meaning.
     ///
@@ -722,6 +764,7 @@ impl Default for OwnHomeData {
             avatar_stats: BTreeMap::new(),
             fields_unlocked: 3,
             tutorial_words: [0; 6],
+            farm_name: None,
             unknown_avatar_vector_count: 0,
             blobs: [
                 json!({}),
@@ -759,14 +802,23 @@ impl Message for OwnHomeData {
             let start = own_home_bitset_offset(36) + index * 4;
             prefix[start..start + 4].copy_from_slice(&word.to_be_bytes());
         }
-        w.raw(&prefix[..OWN_HOME_STATS_OFFSET]);
+        w.raw(&prefix[..OWN_HOME_NAME_OFFSET]);
+        match &self.farm_name {
+            Some(name) => w.string(name),
+            None => w.int(u32::MAX),
+        };
+        w.raw(&prefix[OWN_HOME_NAME_END..OWN_HOME_STATS_OFFSET]);
         write_avatar_stats(w, &self.avatar_stats);
         w.raw(&prefix[OWN_HOME_STATS_END..OWN_HOME_AVATAR_VECTOR_OFFSET])
             .vint(self.unknown_avatar_vector_count);
         write_home(w, &prefix[OWN_HOME_AVATAR_VECTOR_END..], &self.blobs);
     }
     fn decode(r: &mut Reader) -> Result<Self> {
-        let prefix = r.raw(OWN_HOME_STATS_OFFSET)?;
+        let mut prefix = r.raw(OWN_HOME_NAME_OFFSET)?.to_vec();
+        // Empty strings (all-zero fixtures) decode as None as well.
+        let farm_name = r.string()?.filter(|name| !name.is_empty());
+        prefix.extend_from_slice(&[0; 4]);
+        prefix.extend_from_slice(r.raw(OWN_HOME_STATS_OFFSET - OWN_HOME_NAME_END)?);
         ensure!(
             prefix[..OWN_HOME_AVATAR_START] == OWN_HOME_PREFIX[..OWN_HOME_AVATAR_START]
                 && prefix[364] == 0,
@@ -812,6 +864,7 @@ impl Message for OwnHomeData {
             avatar_stats,
             fields_unlocked,
             tutorial_words,
+            farm_name,
             unknown_avatar_vector_count,
             blobs: read_home(
                 r,
@@ -1257,7 +1310,11 @@ mod tests {
     }
     #[test]
     fn friend_reports_match_captured_layouts() {
-        let ids = vec![0x7fff_ffff_0000_0001, 0x7fff_ffff_0000_0002, 0x7fff_ffff_0000_0003];
+        let ids = vec![
+            0x7fff_ffff_0000_0001,
+            0x7fff_ffff_0000_0002,
+            0x7fff_ffff_0000_0003,
+        ];
         let mut w = Writer::new();
         w.vint(ids.len() as u32);
         for &id in &ids {
@@ -1267,12 +1324,23 @@ mod tests {
         request.string("EN");
         let request = request.into_bytes();
         assert_eq!(request.len(), 31);
-        assert_eq!(FriendIdReport::decode(14690, &request).unwrap(),
-            FriendIdReport::WithLanguage { ids: ids.clone(), language: Some("EN".into()) });
+        assert_eq!(
+            FriendIdReport::decode(14690, &request).unwrap(),
+            FriendIdReport::WithLanguage {
+                ids: ids.clone(),
+                language: Some("EN".into())
+            }
+        );
         assert!(FriendIdReport::decode(14690, &request[..30]).is_err());
         w.bool(true).long(0);
-        assert_eq!(FriendIdReport::decode(17887, &w.into_bytes()).unwrap(),
-            FriendIdReport::WithFlag { ids, flag: true, trailing_id: 0 });
+        assert_eq!(
+            FriendIdReport::decode(17887, &w.into_bytes()).unwrap(),
+            FriendIdReport::WithFlag {
+                ids,
+                flag: true,
+                trailing_id: 0
+            }
+        );
     }
 
     #[test]
@@ -1380,6 +1448,8 @@ mod tests {
             avatar_stats: BTreeMap::new(),
             fields_unlocked: 0,
             tutorial_words: [0; 6],
+            // Greg's prefix carries an empty (non-null) name.
+            farm_name: Some(String::new()),
             unknown_avatar_vector_count: 0,
             blobs: blobs.clone(),
         }
@@ -1397,15 +1467,18 @@ mod tests {
                 avatar_stats: BTreeMap::new(),
                 fields_unlocked: 0,
                 tutorial_words: [0; 6],
+                farm_name: None,
                 unknown_avatar_vector_count: 0,
                 blobs: blobs.clone(),
             },
         );
         encoded[395] = 0;
-        assert!(AiHomeData::from_bytes(&encoded)
-            .unwrap_err()
-            .to_string()
-            .contains("AiHomeData prefix"));
+        assert!(
+            AiHomeData::from_bytes(&encoded)
+                .unwrap_err()
+                .to_string()
+                .contains("AiHomeData prefix")
+        );
         let other = OtherHomeData { blobs };
         let mut encoded = other.to_bytes();
         let mut prefix = [0; 819];
@@ -1415,10 +1488,12 @@ mod tests {
         assert_eq!(OtherHomeData::from_bytes(&encoded).unwrap(), other);
         assert!(OwnHomeData::from_bytes(&encoded).is_err());
         encoded[803] = 0;
-        assert!(OtherHomeData::from_bytes(&encoded)
-            .unwrap_err()
-            .to_string()
-            .contains("OtherHomeData prefix"));
+        assert!(
+            OtherHomeData::from_bytes(&encoded)
+                .unwrap_err()
+                .to_string()
+                .contains("OtherHomeData prefix")
+        );
         encoded[803] = 1;
         encoded[0] = 1;
         assert!(OtherHomeData::from_bytes(&encoded).is_err());
@@ -1528,10 +1603,12 @@ mod tests {
             let mut w = Writer::new();
             w.raw(&OWN_HOME_PREFIX[..OWN_HOME_AVATAR_VECTOR_OFFSET])
                 .vint(count);
-            assert!(OwnHomeData::from_bytes(&w.into_bytes())
-                .unwrap_err()
-                .to_string()
-                .contains("nonempty unknown avatar vector"));
+            assert!(
+                OwnHomeData::from_bytes(&w.into_bytes())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("nonempty unknown avatar vector")
+            );
         }
     }
 
@@ -1539,10 +1616,12 @@ mod tests {
     fn own_home_rejects_invalid_prefix_and_extra_or_missing_blobs() {
         let mut bytes = OwnHomeData::default().to_bytes();
         bytes[395] = 0;
-        assert!(OwnHomeData::from_bytes(&bytes)
-            .unwrap_err()
-            .to_string()
-            .contains("prefix"));
+        assert!(
+            OwnHomeData::from_bytes(&bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("prefix")
+        );
         bytes[395] = 1;
         bytes[0] = 1;
         assert!(OwnHomeData::from_bytes(&bytes).is_err());
@@ -1554,10 +1633,12 @@ mod tests {
             );
         }
         bytes.extend_from_slice(&[0; 4]);
-        assert!(OwnHomeData::from_bytes(&bytes)
-            .unwrap_err()
-            .to_string()
-            .contains("trailing"));
+        assert!(
+            OwnHomeData::from_bytes(&bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("trailing")
+        );
     }
 
     #[test]
@@ -1691,5 +1772,55 @@ mod tests {
         let mut expected = legacy[..legacy.len() - 6].to_vec();
         expected.extend([0, 0, 0, 4, 0, 0, 0, 0]);
         assert_eq!(boxed.to_bytes(), expected);
+    }
+}
+
+#[cfg(test)]
+mod farm_name_tests {
+    use super::*;
+
+    #[test]
+    fn own_home_sends_null_name_by_default() {
+        let bytes = OwnHomeData::default().to_bytes();
+        assert_eq!(bytes[4..8], [0xff; 4]);
+        assert_eq!(OwnHomeData::from_bytes(&bytes).unwrap().farm_name, None);
+    }
+
+    #[test]
+    fn own_home_name_round_trips_and_shifts_layout() {
+        let base = OwnHomeData::default();
+        let named = OwnHomeData {
+            farm_name: Some("Orchard".into()),
+            ..base.clone()
+        };
+        let bytes = named.to_bytes();
+        assert_eq!(bytes[4..8], 7u32.to_be_bytes());
+        assert_eq!(&bytes[8..15], b"Orchard");
+        assert_eq!(bytes.len(), base.to_bytes().len() + 7);
+        assert_eq!(OwnHomeData::from_bytes(&bytes).unwrap(), named);
+    }
+
+    #[test]
+    fn name_response_codes() {
+        assert_eq!(ChangeHomeNameResponse::Ok.to_bytes(), [1]);
+        assert_eq!(ChangeHomeNameResponse::Failed.to_bytes(), [0]);
+        assert_eq!(ChangeHomeNameResponse::BadWord.to_bytes(), [2]);
+    }
+
+    #[test]
+    fn name_validation() {
+        assert_eq!(
+            ChangeHomeName(" Orchard ".into()).validate().as_deref(),
+            Some("Orchard")
+        );
+        assert_eq!(ChangeHomeName("  ".into()).validate(), None);
+        assert_eq!(ChangeHomeName("a\nb".into()).validate(), None);
+        assert_eq!(
+            ChangeHomeName("é".repeat(25))
+                .validate()
+                .map(|n| n.chars().count()),
+            Some(25)
+        );
+        assert_eq!(ChangeHomeName("x".repeat(26)).validate(), None);
     }
 }

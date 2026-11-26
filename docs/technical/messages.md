@@ -136,12 +136,19 @@ the NameFarm check pass and the client complete 3600017 (Medium–High). It is
 unknown how the `TID_NAME_FARM_WAITING` popup gets closed (Low). It may be a
 virtual +0xcc call on the success path, or the screen may check for itself.
 
-**Planned server behaviour.**
+**Server behaviour (implemented, not yet live-tested).**
 
-1. Send a null name (`ffffffff`) in the 26017 avatar while the account has no
-   name.
-2. On 11489, validate the name, save it, and reply 21608 with code 1.
-3. On later logins, send the saved name as a normal string.
+- The 26017 avatar carries `HomeData.farm_name`. It is a null string
+  (`ffffffff`) while unset, which is the default for new and existing
+  accounts, so the client runs the NameFarm step. It becomes a normal string
+  once the player names the farm.
+- On 11489 the server trims the name and rejects it if it is empty, contains
+  control characters, or is longer than 25 characters (`MaxFarmNameLength`).
+  Otherwise it saves the name and replies 21608 with code 1; on rejection it
+  replies 0. Code 2 is never sent, because the server has no profanity filter.
+- Accounts that already completed 3600017 under the old all-zero prefix keep
+  that tutorial bit. The step does not re-run for them, but the name can still
+  be set from the profile.
 
 To verify on the client, check the following on a fresh account:
 
@@ -284,7 +291,7 @@ Columns:
 | 11316 | — | C→S | decoded | — | Decoder 0x52642e reads no fields. Sender 0x58ef9c is called from code with `TaskBoughtStart`/`TaskBoughtEnd` (likely Derby task purchase) (Low). |
 | 11362 | ChangeNeighborhoodSettingsMessage | C→S | decoded | — | Body (decoder 0x604078): object(0x2ded88), object(0x3530ce), 2× VInt, bool, 3× string, object(0x6539a0), object(0x6bb7f0). Sent from the same neighbourhood editor function as 12793 (0x6c57ec), whose window shows `TID_NEIGHBORHOOD_PROFANITIES_IN_NAME/TEXT/DESCRIPTION` and `TID_NEIGHBORHOOD_NAME_TOO_SHORT`. It has no LogicLong, unlike 12793, My earlier guess that this was the create message was wrong: the decoder names it ChangeNeighborhoodSettingsMessage. Client class name `ChangeNeighborhoodSettingsMessage`, from the log string in its decoder (High). |
 | 11415 | — | C→S | decoded | — | Body (decoder 0x541c2c): LogicLong. Purpose not established (static scan). Sender 0x5693b0 is reached from the Personal Train window (0x1fac9e: `SendPersonalTrain`, `TID_PERSONAL_TRAIN_TITLE`, `TrainCapacity`); the LogicLong is probably the player the train is sent to (Medium, subagent finding). |
-| 11489 | ChangeHomeNameMessage | C→S | decoded | Handled | Body (decoder 0x20b5fc): one string with a maximum of 1000 bytes; the chosen farm name. The client checks neither emptiness nor `MaxFarmNameLength`. Sent from the naming popup (0x600706, `TID_NAME_FARM_WAITING` caller 0x1a1daa). The server must reply 21608. See "Farm name" above (Medium–High). Client class name `ChangeHomeNameMessage`, from the log string in its decoder (High). |
+| 11489 | ChangeHomeNameMessage | C→S | decoded | Handled | Body (decoder 0x20b5fc): one string with a maximum of 1000 bytes; the chosen farm name. The client checks neither emptiness nor `MaxFarmNameLength`. Sent from the naming popup (0x600706, `TID_NAME_FARM_WAITING` caller 0x1a1daa). The server validates and saves the name, then replies 21608. See "Farm name" above (Medium–High). Client class name `ChangeHomeNameMessage`, from the log string in its decoder (High). |
 | 11747 | — | C→S | decoded | — | Body (decoder 0x198272): LogicLong. Purpose not established (static scan). |
 | 11833 | — | C→S | decoded | Handled | Mode-entry notification for mode 8 (ModeManager). Handler not yet added. |
 | 11923 | — | C→S | decoded | — | Body (decoder 0xd3e06): VInt. Sent from the farm edit-mode layout-slots window (0x2f60a8: `TID_EDIT_MODE_EDIT`, `TID_EDIT_MODE_COPY`, `TID_EDIT_MODE_ACTIVATE`; ctor 0x110194). The captured value 1 followed 5 s later by a 10987 fits selecting layout slot 1 and then saving or activating it (Low–Medium). The client has a `ChangeLayoutNamesMessage` class and receives a `LayoutNameListMessage`. Captured once with body `01` (VInt 1), 5 s before a 10987. |
@@ -395,7 +402,7 @@ Columns:
 | 21395 | — | S→C | decoded | — | Body (decoder 0x579e0c): VInt, object(0x2db9d8), object(0x815e30), object(0x57d666), object(0xea3e2), object(0x72a738). Handled in the game switch (case code at 0x550b95). The case code calls `SoilSocialManager::setFriendMetas` (0x6e75bc) and `NeighborhoodManager::setFriendMetas` (0x6d451a), so it delivers friend metadata to the social managers (Medium). |
 | 21404 | — | S→C | decoded | — | Body (decoder 0x5968aa): VInt. Handled in the game switch (case code at 0x550c45). Purpose not established (static scan). **Live-tested 2026-11-25:** body `01` after the farm loaded produced no visible UI, no client reply and no crash. |
 | 21444 | — | S→C | decoded | — | Game-switch arm 0x54f132; no behaviour recorded. |
-| 21608 | ChangeHomeNameResponseMessage | S→C | decoded | — | Body (decoder 0x1D7F26): one VInt result: 1 success, 0 failure, 2 `BADWORD`. Game-switch arm 0x5503c6. On success the client commits the pending name to avatar +0x10, which lets tutorial step NameFarm (3600017) complete. See "Farm name" above (High for the format, Medium–High for the effect). |
+| 21608 | ChangeHomeNameResponseMessage | S→C | decoded | Handled | Body (decoder 0x1D7F26): one VInt result: 1 success, 0 failure, 2 `BADWORD`. Game-switch arm 0x5503c6. On success the client commits the pending name to avatar +0x10, which lets tutorial step NameFarm (3600017) complete. See "Farm name" above (High for the format, Medium–High for the effect). |
 | 21738 | — | S→C | empty decoder | — | Fieldless (no body). No feature-specific sender found statically; the ctor is reached only from the generic factory. Purpose not established. |
 | 21817 | — | S→C | decoded | — | Generic scene-setup arm (0x54e9be); no behaviour recorded. |
 | 21823 | — | S→C | decoded | — | Body (decoder 0x5983d6): VInt, object(0x6424b4), object(0x815e30), object(0x57d666), object(0xea3e2), object(0x72a738). Handled in the game switch (case code at 0x551666). Purpose not established (static scan). |

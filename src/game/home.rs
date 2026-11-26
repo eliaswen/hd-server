@@ -1,13 +1,14 @@
 //! Persistent JSON representation; wire bytes stay in protocol::messages.
-use crate::protocol::{messages::OwnHomeData, Message};
-use anyhow::{ensure, Context, Result};
+use crate::protocol::{Message, messages::OwnHomeData};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomeData {
-    /// Requested farm name. Its location in the outgoing avatar is unconfirmed.
+    /// Farm name, sent in the 26017 avatar; `None` (the default) is sent as null
+    /// so the client runs the NameFarm tutorial step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub farm_name: Option<String>,
     /// Server replay metadata for documented effects whose client JSON keys are unknown.
@@ -167,6 +168,7 @@ impl HomeData {
             avatar_stats: self.avatar_stats.clone(),
             fields_unlocked: crate::game::progression::fields_unlocked(level),
             tutorial_words: self.tutorial_words,
+            farm_name: self.farm_name.clone(),
             unknown_avatar_vector_count: 0,
             blobs: self.blobs(),
         };
@@ -203,11 +205,13 @@ mod tests {
         );
         let json = serde_json::to_vec(&home).unwrap();
         assert_eq!(serde_json::from_slice::<HomeData>(&json).unwrap(), home);
-        assert!(!serde_json::to_value(&home)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .contains_key("avatar_stats"));
+        assert!(
+            !serde_json::to_value(&home)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("avatar_stats")
+        );
     }
 
     #[test]

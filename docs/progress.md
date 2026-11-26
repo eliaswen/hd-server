@@ -41,7 +41,7 @@ The status of each part of the server for Hay Day 1.43.150 (build 1598).
 | Multi-device support | ❌ | No way at the moment to authenticate multiple devices for the same account |
 | Disconnect message ("another device is connecting") (25892) | 🟡 | Builder exists; never sent automatically. Unlikely to be implemented soon due to the difficulty of having multi device support for one farm |
 | Flipping objects | ✅ | |
-| Farm name (11489) | 🟡 | Requested name saved to the account. Not yet sent back in the avatar, and no 21608 reply is sent. The all-zero avatar sends an empty, non-null name, so the client skips the "Name your farm" tutorial step and the profile shows a blank name. See [messages](technical/messages.md#farm-name-changehomename-11489-changehomenameresponse-21608) |
+| Farm name (11489, 21608) | ✅ | Sent in the 26017 avatar (null until set, so the "Name your farm" tutorial step runs). Renames are validated, saved and answered with 21608. See [messages](technical/messages.md#farm-name-changehomename-11489-changehomenameresponse-21608). |
 
 ## Gameplay commands
 

@@ -20,10 +20,11 @@ use crate::{
     protocol::{
         Message, catalogue,
         messages::{
-            AccountSummary, ChangeHomeName, ChatSilenceNotice, ClientHello, EmptyFriendList,
-            EndClientTurn, EntityBatch, FriendIdReport, FriendListRequest, HomeSync, LoginOk,
-            LoginOkTail, MaintenanceWarning, OptionalIdsReply, OtherDeviceConnected, OwnHomeData,
-            PingReply, PostLoginReady, ServerHello, SessionReady, StatusNotice, ids,
+            AccountSummary, ChangeHomeName, ChangeHomeNameResponse, ChatSilenceNotice, ClientHello,
+            EmptyFriendList, EndClientTurn, EntityBatch, FriendIdReport, FriendListRequest,
+            HomeSync, LoginOk, LoginOkTail, MaintenanceWarning, OptionalIdsReply,
+            OtherDeviceConnected, OwnHomeData, PingReply, PostLoginReady, ServerHello,
+            SessionReady, StatusNotice, ids,
         },
     },
 };
@@ -537,18 +538,30 @@ impl<'a> Session<'a> {
                     FriendListRequest::from_bytes(&body)?;
                 }
                 if frame.msg_type == ChangeHomeName::TYPE {
-                    match ChangeHomeName::from_bytes(&body) {
-                        Ok(ChangeHomeName(name)) => {
-                            if let Some((store, account)) =
-                                self.config.accounts.as_ref().zip(self.account.as_ref())
-                            {
+                    let result = match ChangeHomeName::from_bytes(&body) {
+                        Ok(request) => match (
+                            request.validate(),
+                            self.config.accounts.as_ref().zip(self.account.as_ref()),
+                        ) {
+                            (Some(name), Some((store, account))) => {
+                                tracing::info!(account_id = account.id, %name, "farm renamed");
                                 store.rename_home(account.id, name)?;
+                                ChangeHomeNameResponse::Ok
                             }
-                        }
+                            (None, _) => {
+                                tracing::warn!(name = %request.0, "rejecting invalid farm name");
+                                ChangeHomeNameResponse::Failed
+                            }
+                            (Some(_), None) => ChangeHomeNameResponse::Failed,
+                        },
                         Err(error) => {
-                            tracing::warn!(%error, "ignoring malformed farm name request")
+                            tracing::warn!(%error, "rejecting malformed farm name request");
+                            ChangeHomeNameResponse::Failed
                         }
-                    }
+                    };
+                    let (record, reply) = seal(tx, &Outgoing::new(&result));
+                    step.records.push(record);
+                    step.replies.push(reply);
                 }
                 if frame.msg_type == 18485 {
                     let visit = crate::protocol::messages::VisitPlayer::from_bytes(&body)?;
@@ -870,12 +883,20 @@ fn message_purpose(kind: u16) -> &'static str {
         26017 => "authoritative account snapshot: avatar stats, bitsets and home JSON",
         11292 => "client simulation tick, checksum and queued gameplay commands",
         16368 => "avatar/home identity report; no default reply",
-        13198 => "mode 3 entered: visiting a farm; reply with configured Greg data; selector meaning unknown",
+        13198 => {
+            "mode 3 entered: visiting a farm; reply with configured Greg data; selector meaning unknown"
+        }
         28383 => "Greg AI-home snapshot",
         19838 => "friend-list request; does not change farm mode or own-farm replay",
-        26656 => "friend-list reply; empty list marks friend data received; Greg visibility untested",
-        18485 => "mode 2 entered: visiting target account; optional development friend action; no home response",
-        17534|16986|19214|14581|11833 => "mode-entry notification; this mode's meaning and required response remain unknown",
+        26656 => {
+            "friend-list reply; empty list marks friend data received; Greg visibility untested"
+        }
+        18485 => {
+            "mode 2 entered: visiting target account; optional development friend action; no home response"
+        }
+        17534 | 16986 | 19214 | 14581 | 11833 => {
+            "mode-entry notification; this mode's meaning and required response remain unknown"
+        }
         29950 => "other-player home snapshot",
         10099 => "client reports failure to decrypt a server message",
         19336 => "request answered by configured 22151 reply",
@@ -1155,14 +1176,16 @@ pub(crate) mod tests {
                 }
                 if acts && target == RESET_ID {
                     assert!(store.contains(account.account_id).unwrap());
-                    assert!(dir
-                        .join(account.account_id.to_string())
-                        .join("home.json")
-                        .exists());
-                    assert!(!dir
-                        .join(account.account_id.to_string())
-                        .join("turns.jsonl")
-                        .exists());
+                    assert!(
+                        dir.join(account.account_id.to_string())
+                            .join("home.json")
+                            .exists()
+                    );
+                    assert!(
+                        !dir.join(account.account_id.to_string())
+                            .join("turns.jsonl")
+                            .exists()
+                    );
                     let mut w = crate::protocol::stream::Writer::new();
                     w.long(account.account_id).string(&account.pass_token);
                     let recreated = store.login(&w.into_bytes()).unwrap();
@@ -1220,11 +1243,13 @@ pub(crate) mod tests {
             .unwrap()["Seed"]
             .clone();
         let trash = crate::replay::tests::turn(10, &[vec![33, 0, 4, 1], vec![27, 0, 2]]);
-        assert!(session
-            .handle(&ciphers.send(11292, &trash))
-            .unwrap()
-            .replies
-            .is_empty());
+        assert!(
+            session
+                .handle(&ciphers.send(11292, &trash))
+                .unwrap()
+                .replies
+                .is_empty()
+        );
         let waiting = store.home(account.account_id).unwrap();
         let board = waiting.c["Objects"]
             .as_array()
@@ -1245,10 +1270,12 @@ pub(crate) mod tests {
         let notes = store.turns(account.account_id).unwrap();
         let last = notes.as_array().unwrap().last().unwrap();
         assert!(!last["replay_notes"].as_array().unwrap().is_empty());
-        assert!(last["replay_notes"][0]
-            .as_str()
-            .unwrap()
-            .contains("visitor deal"));
+        assert!(
+            last["replay_notes"][0]
+                .as_str()
+                .unwrap()
+                .contains("visitor deal")
+        );
         let ready = session.handle(&ciphers.send(10366, &[])).unwrap();
         let snapshot = OwnHomeData::from_bytes(&ciphers.receive(&ready.replies[0])).unwrap();
         assert_eq!(snapshot.avatar_stats, updated.avatar_stats);
@@ -1314,11 +1341,13 @@ pub(crate) mod tests {
             let order = &board["Orders"][0];
             let before_cash = initial.avatar_stats.get(&1900000).copied().unwrap_or(0);
             let complete = crate::replay::tests::turn(10, &[vec![28, 0, 1], vec![41, 2]]);
-            assert!(session
-                .handle(&ciphers.send(11292, &complete))
-                .unwrap()
-                .replies
-                .is_empty());
+            assert!(
+                session
+                    .handle(&ciphers.send(11292, &complete))
+                    .unwrap()
+                    .replies
+                    .is_empty()
+            );
             let stored = store.home(account.account_id).unwrap();
             assert_eq!(stored.predefined_orders, 3); // B follows the sent A.
             assert_eq!(
@@ -1337,8 +1366,7 @@ pub(crate) mod tests {
             drop(session);
             drop(cfg);
             drop(store);
-            let reopened =
-                crate::storage::open_file(dir.join("accounts.json"), initial).unwrap();
+            let reopened = crate::storage::open_file(dir.join("accounts.json"), initial).unwrap();
             assert_eq!(reopened.home(account.account_id).unwrap(), stored);
             std::fs::remove_dir_all(dir).unwrap();
         }
@@ -1729,11 +1757,13 @@ pub(crate) mod tests {
             xp: None,
             tutorial_words: None,
         };
-        assert!(store
-            .validate_progress(invalid)
-            .unwrap_err()
-            .to_string()
-            .contains("account"));
+        assert!(
+            store
+                .validate_progress(invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("account")
+        );
         assert_eq!(store.home(account.account_id).unwrap(), changed);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1807,7 +1837,10 @@ pub(crate) mod tests {
         let login = session.handle(&client.login(&hello)).unwrap();
         let (account, mut ciphers) = client.login_ok(&login.replies[0]);
         store
-            .replace_home(account.account_id, crate::game::starter::new_home().unwrap())
+            .replace_home(
+                account.account_id,
+                crate::game::starter::new_home().unwrap(),
+            )
             .unwrap();
         let ready = session.handle(&ciphers.send(10366, &[])).unwrap();
         ciphers.receive(&ready.replies[0]);
@@ -1859,11 +1892,13 @@ pub(crate) mod tests {
             let unknown = session.handle(&ciphers.send(message, &body)).unwrap();
             assert!(unknown.replies.is_empty());
             assert!(session.replay.is_none());
-            assert!(session
-                .handle(&ciphers.send(10366, &[]))
-                .unwrap()
-                .replies
-                .is_empty());
+            assert!(
+                session
+                    .handle(&ciphers.send(10366, &[]))
+                    .unwrap()
+                    .replies
+                    .is_empty()
+            );
             assert!(session.replay.is_some());
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -1920,11 +1955,13 @@ pub(crate) mod tests {
                 _ => assert!(step.replies.is_empty()),
             }
         }
-        assert!(session
-            .handle(&ciphers.send(11292, &[0, 0, 0]))
-            .unwrap()
-            .replies
-            .is_empty());
+        assert!(
+            session
+                .handle(&ciphers.send(11292, &[0, 0, 0]))
+                .unwrap()
+                .replies
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2042,9 +2079,10 @@ pub(crate) mod tests {
         }
         assert!(text.contains("b004c1e6bba800022291bab703b5012380bab703b501"));
         assert!(text.contains("a: 304, b: 2189916545, n: 2, commands: [34,"));
-        assert!(text
-            .lines()
-            .any(|line| line.contains("EndClientTurn") && line.contains("turn=None")));
+        assert!(
+            text.lines()
+                .any(|line| line.contains("EndClientTurn") && line.contains("turn=None"))
+        );
         assert!(text.contains(&"cd".repeat(8)));
 
         assert_eq!(
@@ -2075,7 +2113,10 @@ pub(crate) mod tests {
         let login = session.handle(&client.login(&hello)).unwrap();
         let (account, mut ciphers) = client.login_ok(&login.replies[0]);
         store
-            .replace_home(account.account_id, crate::game::starter::new_home().unwrap())
+            .replace_home(
+                account.account_id,
+                crate::game::starter::new_home().unwrap(),
+            )
             .unwrap();
         let ready = session.handle(&ciphers.send(10366, &[])).unwrap();
         ciphers.receive(&ready.replies[0]);
@@ -2083,10 +2124,18 @@ pub(crate) mod tests {
         let step = session
             .handle(&ciphers.send(ChangeHomeName::TYPE, &rename))
             .unwrap();
-        assert!(step.replies.is_empty());
-        session
+        assert_eq!(step.replies.len(), 1);
+        assert_eq!(
+            ChangeHomeNameResponse::from_bytes(&ciphers.receive(&step.replies[0])).unwrap(),
+            ChangeHomeNameResponse::Ok
+        );
+        let step = session
             .handle(&ciphers.send(ChangeHomeName::TYPE, &[0xff; 4]))
             .unwrap();
+        assert_eq!(
+            ChangeHomeNameResponse::from_bytes(&ciphers.receive(&step.replies[0])).unwrap(),
+            ChangeHomeNameResponse::Failed
+        );
         let first = crate::replay::tests::turn(304, &[]);
         session.handle(&ciphers.send(11292, &first)).unwrap();
         let offending =
@@ -2154,11 +2203,13 @@ pub(crate) mod tests {
         assert_eq!(step.replies[0].msg_type, 29997);
         assert!(ciphers.peek(&step.replies[0]).is_empty());
         // A repeated 10366 does not resend.
-        assert!(session
-            .handle(&ciphers.send(10366, &[]))
-            .unwrap()
-            .replies
-            .is_empty());
+        assert!(
+            session
+                .handle(&ciphers.send(10366, &[]))
+                .unwrap()
+                .replies
+                .is_empty()
+        );
 
         session.handle(&ciphers.send(10099, &[])).unwrap();
         assert_eq!(session.post_login_counts(), Some((1, 1)));
