@@ -29,7 +29,7 @@ The table lists every command type 1–304. Rows that existed before 2026-11-25 
 | 21 | High | select animal in habitat (UI) | VInt habitatId, VInt animalId, VInt tick | Sets transient UI flags on the habitat's animals. Not persisted. Server: no-op. |
 | 22 | High | Harvest follow-up | VInt field instance, VInt tick |  |
 | 23 | High | Clear harvested field | VInt field instance, VInt tick |  |
-| 24 | High | crop ripe notification | VInt fieldObjId (class 4), VInt tick | Client reports that a crop field is ripe. Sent before the harvest (cmd 2) in the same round. The server only logs it; no state change. **Captured:** on fields 400018–400020, each followed by 2 (harvest), 22 and 23 on the same field. |
+| 24 | High | crop ripe (clears growth timer) | VInt fieldObjId (class 4), VInt tick | Handler 0x16432a gets the field timer (0x6011ea, field+0x50) and sets `TicksLeft` to 0 (0x6a7fe8). It is not a passive notification (static, R39). Sent before the harvest (cmd 2) in the same round. Server: set the field's timer to finished and drop `Timer`; see [farm-objects](farm-objects.md#crop-fields-growth-timer). **Captured:** on fields 400018–400020, each followed by 2 (harvest), 22 and 23 on the same field. |
 | 25 | High | Paint building part | VInt object instance, signed byte part index, VInt tick |  |
 | 26 | Medium | order board action (take / complete order) | VInt orderTableObjId (class 32, order_tables), VInt tick | Acts on an order slot of an order board (corpus 3200000). The slot state changes and rewards come from the order row. Exact action (take vs complete) is not resolved. Server: update the order slot state; the order and reward logic is in the order generator (R34). |
 | 27 | High | Trash truck order | signed byte order slot, VInt tick |  |

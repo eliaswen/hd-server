@@ -34,6 +34,75 @@ player queued (live-observed). The server's `start_production`
 booster. The client saves `BoosterID` only when a booster is present
 (`0x2eb436`). Existing saved queue entries are not rewritten.
 
+## Crop fields (growth timer)
+
+Static analysis from round R39. Nothing in this section has been live-tested.
+
+### JSON format
+
+The field saver is `0x237a2a` (vtable slot +0x54) and the loader is
+`0x44bfe4` (slot +0x60) (High). Keys: `ID`, `X`, `Y`, `Timer`, plus the
+optional `Mirrored` and `BoosterList`.
+
+| Timer key | Meaning |
+|---|---|
+| `StartSeconds` | Total growth duration in seconds. This is a duration, not a timestamp. |
+| `TicksLeft` | Remaining simulation ticks (about 66 ms each): `trunc(1000*s/66)` |
+
+- The saver writes `Timer` only when `TicksLeft > 0` and the field's flags are
+  clear. A field with no `Timer` is a finished (ripe) crop (High).
+- A missing `Timer`, a non-object `Timer`, or missing members all load as 0,
+  which also means ripe (High).
+- The 66 ms tick conversion arithmetic is High confidence. The wall-clock rate
+  is Medium.
+
+```json
+{"ID":400001,"X":19,"Y":20,"Timer":{"StartSeconds":120,"TicksLeft":1818}}
+```
+
+That is a growing field. The same object without `Timer` is ripe. Wheat being
+data ID 400001 has not been independently confirmed.
+
+### Planting and ripeness
+
+- **Planting (command 1):** jump case `0x53bb80`, decoder `0x700060`, handler
+  `0x6ae562`. The timer is initialised by `0x611c94` → `0x61d094`, and
+  `0x44197a` converts seconds to ticks (High).
+- **Duration:** `0x4e31fe` computes `TimeMin*60 + TimeSec`. An optional
+  modifier is applied, and what that modifier is remains unknown (High).
+- **Ripeness:** predicate `0x2e7364` treats a crop as finished when its ticks
+  left are ≤ 0, or when `StartSeconds` is missing or 0. Progress is counted in
+  ticks, not compared against a timestamp (High for the predicate, Medium for
+  the whole trigger chain).
+- **Command 24:** this command does more than notify. Handler `0x16432a`
+  (call site `0x1643c0`) gets the timer through `0x6011ea` (`field+0x50`), then
+  sets `TicksLeft` to 0 through `0x6a7fe8` (High). See
+  [command 24](end-client-turn-commands.md).
+- Q2's `+0x54`/`+0x58` are the same fields as `Timer+4`/`Timer+8`
+  (`StartSeconds`/`TicksLeft`).
+
+### On reload
+
+- The loader copies `TicksLeft` as-is. It reads no clock and subtracts no
+  elapsed time (High).
+- The per-field update `0x169192` → `0x1f38a2` lowers the remaining ticks by a
+  delta (High).
+- A bulk update chain (`0x4aae32` → … → `0x563ce4`) can also advance timers.
+  It is unknown whether a normal reconnect runs it, and with what delta
+  (Unknown).
+
+The loader is built for "remaining ticks supplied by the server", so the
+server should apply offline catch-up itself:
+
+1. Compute `remaining = TimeMin*60 + TimeSec - elapsed`.
+2. If `remaining > 0`, send
+   `Timer: {StartSeconds: duration, TicksLeft: remaining*1000/66}`.
+3. Otherwise, omit `Timer`.
+
+Leaving `Timer` out of a growing crop makes it load as ripe. That is the
+current "crops are instantly grown upon reload" symptom. A live reconnect test
+is still needed, to rule out the client also applying elapsed time.
+
 ## Truck order board (object 3200000)
 
 `Seed` plus nine `Orders` slots. An active order has `Lvl`, `Cash`, `Exp`,

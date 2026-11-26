@@ -82,6 +82,74 @@ The body holds avatar stats, unlock bitsets and three zlib-compressed JSON
 documents (`a`, `b`, `c`) that describe the farm objects. 28383 (Greg's farm)
 uses the same layout. Certain all-zero body lengths crash the client.
 
+### Farm name: ChangeHomeName (11489), ChangeHomeNameResponse (21608)
+
+Static analysis (round R38). Nothing below has been tested on the client yet.
+
+**Avatar name field.** `LogicClientAvatar::decode` (0x446a4c) reads the farm
+name as its fourth field, after three VInts (readString call at 0x446ab8). The
+result is stored at avatar +0x10 (getter 0x48ca24, setter 0x57bc06). The wire
+format is a BE32 length followed by UTF-8 bytes, at avatar offset 3 (body
+offset 4 in our 26017 fixtures) (High; the body offset itself is Medium).
+readString (0x146220) handles lengths like this (High):
+
+- `ffffffff` (−1) returns NULL.
+- 0 up to the maximum length allocates a String, so the result is non-NULL even
+  when the string is empty.
+- Any other negative length is an error.
+
+Our `OWN_HOME_PREFIX` is all zeros at this field, so the client receives a
+non-NULL empty name. Its profile shows a blank farm name.
+
+**Tutorial step NameFarm.** "Step18: Name your farm" is tutorials row 17, data
+ID 3600017, and its action is `NameFarm`. The string-to-enum mapper (0x541188)
+maps NameFarm to action 16, not 5 as round r20 guessed; 5 is BuyAnimals. For
+action 16, the step-completion check in 0x5BAA36 (jump-table target 0x5BAED8,
+helper 0x4f9f42) only tests `avatar+0x10 != NULL`. It compares against no
+default name and checks no flag (High).
+
+With the current all-zero prefix, the client therefore marks 3600017 complete
+at its first tutorial scan. This was observed as the first command of a fresh
+account, at tick 117, and the naming popup never appears. Sending `ffffffff`
+should keep the step pending. `DefaultFarmName` / `TID_DEFAULT_FARM_NAME`
+(0xddd02, 0x600706 popup, 0x25784b, 0x59e65d) only provide fallback or
+pre-filled text and never complete tutorial rows (Medium–High).
+
+**11489 (C→S).** One string, read with a maximum of 1000 bytes. The sender does
+not enforce a non-empty name or `MaxFarmNameLength`, so the server must check
+the name itself. On send, the client stores the name as pending at obj+0x14
+(0x1a1ed0) (Medium–High).
+
+**21608 (S→C).** ChangeHomeNameResponseMessage, type 0x5468 (getter 0x22FA44,
+vtable 0xB45B7C, game-switch arm 0x5503c6). The body is one VInt result code,
+read by decoder 0x1D7F26 into msg+0x34 (High):
+
+| Code | Meaning |
+| --- | --- |
+| 1 | Success |
+| 0 | Failure |
+| 2 | Rejected by the profanity filter (`BADWORD`) |
+
+Any other value is logged as "code %d". On success, 0x43022a calls the setter
+to move the pending name (+0x14) into +0x10 and clears +0x14. Only then does
+the NameFarm check pass and the client complete 3600017 (Medium–High). It is
+unknown how the `TID_NAME_FARM_WAITING` popup gets closed (Low). It may be a
+virtual +0xcc call on the success path, or the screen may check for itself.
+
+**Planned server behaviour.**
+
+1. Send a null name (`ffffffff`) in the 26017 avatar while the account has no
+   name.
+2. On 11489, validate the name, save it, and reply 21608 with code 1.
+3. On later logins, send the saved name as a normal string.
+
+To verify on the client, check the following on a fresh account:
+
+- 3600017 no longer arrives at load.
+- The popup appears at row 17.
+- 11489 is sent, and after the 21608 reply the client sends 3600017.
+- The waiting popup closes.
+
 ### EndClientTurn (11292)
 
 The client's batch of commands. A VInt tick counter (30 per second), a VInt
@@ -216,7 +284,7 @@ Columns:
 | 11316 | — | C→S | decoded | — | Decoder 0x52642e reads no fields. Sender 0x58ef9c is called from code with `TaskBoughtStart`/`TaskBoughtEnd` (likely Derby task purchase) (Low). |
 | 11362 | ChangeNeighborhoodSettingsMessage | C→S | decoded | — | Body (decoder 0x604078): object(0x2ded88), object(0x3530ce), 2× VInt, bool, 3× string, object(0x6539a0), object(0x6bb7f0). Sent from the same neighbourhood editor function as 12793 (0x6c57ec), whose window shows `TID_NEIGHBORHOOD_PROFANITIES_IN_NAME/TEXT/DESCRIPTION` and `TID_NEIGHBORHOOD_NAME_TOO_SHORT`. It has no LogicLong, unlike 12793, My earlier guess that this was the create message was wrong: the decoder names it ChangeNeighborhoodSettingsMessage. Client class name `ChangeNeighborhoodSettingsMessage`, from the log string in its decoder (High). |
 | 11415 | — | C→S | decoded | — | Body (decoder 0x541c2c): LogicLong. Purpose not established (static scan). Sender 0x5693b0 is reached from the Personal Train window (0x1fac9e: `SendPersonalTrain`, `TID_PERSONAL_TRAIN_TITLE`, `TrainCapacity`); the LogicLong is probably the player the train is sent to (Medium, subagent finding). |
-| 11489 | ChangeHomeNameMessage | C→S | decoded | — | Body (decoder 0x20b5fc): string. Sent from the farm-naming flow: caller 0xddd02 references `TID_DEFAULT_FARM_NAME`/`DefaultFarmName`, caller 0x1a1daa references `TID_NAME_FARM_WAITING`. The string is presumably the chosen farm name (Medium). Client class name `ChangeHomeNameMessage`, from the log string in its decoder (High). |
+| 11489 | ChangeHomeNameMessage | C→S | decoded | Handled | Body (decoder 0x20b5fc): one string with a maximum of 1000 bytes; the chosen farm name. The client checks neither emptiness nor `MaxFarmNameLength`. Sent from the naming popup (0x600706, `TID_NAME_FARM_WAITING` caller 0x1a1daa). The server must reply 21608. See "Farm name" above (Medium–High). Client class name `ChangeHomeNameMessage`, from the log string in its decoder (High). |
 | 11747 | — | C→S | decoded | — | Body (decoder 0x198272): LogicLong. Purpose not established (static scan). |
 | 11833 | — | C→S | decoded | Handled | Mode-entry notification for mode 8 (ModeManager). Handler not yet added. |
 | 11923 | — | C→S | decoded | — | Body (decoder 0xd3e06): VInt. Sent from the farm edit-mode layout-slots window (0x2f60a8: `TID_EDIT_MODE_EDIT`, `TID_EDIT_MODE_COPY`, `TID_EDIT_MODE_ACTIVATE`; ctor 0x110194). The captured value 1 followed 5 s later by a 10987 fits selecting layout slot 1 and then saving or activating it (Low–Medium). The client has a `ChangeLayoutNamesMessage` class and receives a `LayoutNameListMessage`. Captured once with body `01` (VInt 1), 5 s before a 10987. |
@@ -327,7 +395,7 @@ Columns:
 | 21395 | — | S→C | decoded | — | Body (decoder 0x579e0c): VInt, object(0x2db9d8), object(0x815e30), object(0x57d666), object(0xea3e2), object(0x72a738). Handled in the game switch (case code at 0x550b95). The case code calls `SoilSocialManager::setFriendMetas` (0x6e75bc) and `NeighborhoodManager::setFriendMetas` (0x6d451a), so it delivers friend metadata to the social managers (Medium). |
 | 21404 | — | S→C | decoded | — | Body (decoder 0x5968aa): VInt. Handled in the game switch (case code at 0x550c45). Purpose not established (static scan). **Live-tested 2026-11-25:** body `01` after the farm loaded produced no visible UI, no client reply and no crash. |
 | 21444 | — | S→C | decoded | — | Game-switch arm 0x54f132; no behaviour recorded. |
-| 21608 | — | S→C | decoded | — | Game-switch arm 0x5503c6: kind 0/1/2 branches that post events. Reaches no scene transition. |
+| 21608 | ChangeHomeNameResponseMessage | S→C | decoded | — | Body (decoder 0x1D7F26): one VInt result: 1 success, 0 failure, 2 `BADWORD`. Game-switch arm 0x5503c6. On success the client commits the pending name to avatar +0x10, which lets tutorial step NameFarm (3600017) complete. See "Farm name" above (High for the format, Medium–High for the effect). |
 | 21738 | — | S→C | empty decoder | — | Fieldless (no body). No feature-specific sender found statically; the ctor is reached only from the generic factory. Purpose not established. |
 | 21817 | — | S→C | decoded | — | Generic scene-setup arm (0x54e9be); no behaviour recorded. |
 | 21823 | — | S→C | decoded | — | Body (decoder 0x5983d6): VInt, object(0x6424b4), object(0x815e30), object(0x57d666), object(0xea3e2), object(0x72a738). Handled in the game switch (case code at 0x551666). Purpose not established (static scan). |
