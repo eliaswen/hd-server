@@ -65,6 +65,19 @@ the verified values.
 
 Run `hd-server --help` for the complete list.
 
+### Maintenance, chat, and area messages
+
+The message specs `maintenance:300` and `chat-silence` emit the maintenance
+countdown (300 seconds) and neighborhood chat-silence notice. They work in
+`--after-ready`, `--reply`, and `--reply-every`. For example,
+`--reply 19336=maintenance:300` sends the warning on the first PhaseFourPing.
+
+The area specs are `own-fishing@FILE`, `other-fishing@FILE`,
+`own-town@FILE`, `other-town@FILE`, and `ai-town@FILE`. Supply a home JSON
+file with the target area's `a`, `b`, and `c` blobs. These are explicit
+snapshot senders for protocol testing. Gameplay replay currently uses the
+own-farm simulation.
+
 ### Testing status notices
 
 Run `python3 tools/test_status_notices.py` to choose a 20103 notice from an

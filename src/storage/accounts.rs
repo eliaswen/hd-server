@@ -229,6 +229,18 @@ impl Store {
         ensure!(accounts.contains_key(&id), "account {id} not found");
         atomic_json(&self.home_path(id), &home)
     }
+    pub fn rename_home(&self, id: u64, name: String) -> Result<()> {
+        let accounts = self.lock()?;
+        ensure!(accounts.contains_key(&id), "account {id} not found");
+        let path = self.home_path(id);
+        let mut home = HomeData::load(&path)?;
+        if home.farm_name.as_ref() != Some(&name) {
+            home.farm_name = Some(name);
+            atomic_json(&path, &home)?;
+        }
+        Ok(())
+    }
+
     /// Explicitly requested development action, always scoped to the session owner.
     pub fn development_action(&self, id: u64, action: crate::game::dev_friends::Action) -> Result<()> {
         self.development_action_at(id, action, crate::replay::now_ms())

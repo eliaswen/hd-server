@@ -1,12 +1,14 @@
 //! Schema-driven command boundaries. Semantics are deliberately separate.
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::OnceLock};
 #[derive(Deserialize)]
 struct Field {
     t: String,
     #[serde(default)]
     count: String,
+    #[serde(default)]
+    role: String,
     #[serde(default)]
     elem: Vec<Field>,
     #[serde(default)]
@@ -85,6 +87,10 @@ impl Reader<'_> {
                     if !(0..=10000).contains(&n) {
                         return None;
                     }
+                    // The static schema did not trace the element decoder here.
+                    if n != 0 && f.elem.is_empty() {
+                        return None;
+                    }
                     let mut items = Vec::new();
                     for _ in 0..n {
                         items.push(self.fields(&f.elem, depth + 1)?);
@@ -117,41 +123,55 @@ pub fn decode(input: &mut &[u8]) -> Option<(u32, Vec<Value>, Vec<u8>)> {
     *input = &original[r.pos..];
     Some((kind, values, raw))
 }
-/// Analytics evidence, not a claim that the executor is fully understood.
-pub fn evidence_name(kind: u32) -> &'static str {
-    static NAMES: OnceLock<BTreeMap<u32, String>> = OnceLock::new();
-    NAMES
-        .get_or_init(|| {
-            let evidence: BTreeMap<u32, Vec<String>> =
-                serde_json::from_str(&crate::data::resource_data::load("command-evidence.json")).unwrap();
-            evidence
-                .into_iter()
-                .map(|(id, strings)| {
-                    let label = if strings.is_empty() {
-                        "unidentified command effect".to_string()
-                    } else {
-                        format!(
-                            "unmodeled command; analytics evidence: {}",
-                            strings
-                                .iter()
-                                .take(3)
-                                .map(|s| s.trim_matches('\''))
-                                .collect::<Vec<_>>()
-                                .join(" / ")
-                        )
-                    };
-                    (id, label)
-                })
-                .collect()
-        })
-        .get(&kind)
-        .map(String::as_str)
-        .unwrap_or("unknown command")
+/// Read the tick at the location identified by the command's wire schema.
+pub fn tick(kind: u32, values: &[Value]) -> Option<u32> {
+    fn find(fields: &[Field], values: &[Value]) -> Option<u32> {
+        for (field, value) in fields.iter().zip(values) {
+            if field.role == "tick" {
+                return u32::try_from(value.as_i64()?).ok();
+            }
+            if field.t == "nested" {
+                if let Some(tick) = find(&field.fields, value.as_array()?) {
+                    return Some(tick);
+                }
+            }
+        }
+        None
+    }
+
+    find(schema().get(&kind.to_string())?, values)
 }
+
+#[path = "command_names.rs"]
+mod names;
+pub use names::name;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_ticks_follow_the_schema() {
+        assert_eq!(tick(235, &[json!(91), json!(8)]), Some(91));
+        assert_eq!(
+            tick(226, &[json!(4), json!(92), json!(1_000_000)]),
+            Some(92)
+        );
+        assert_eq!(tick(296, &[json!([93, [0, 1], 8, [1]])]), Some(93));
+        assert_eq!(tick(272, &[json!([false, [0, 1]])]), None);
+        use crate::protocol::stream::Writer;
+        let mut command = Writer::new();
+        command.vint(231).vint(0).long(0).bool(false).long(0).vint(0).vint(0);
+        let mut zero = command.clone();
+        zero.vint(0);
+        assert_eq!(decode(&mut zero.into_bytes().as_slice()).unwrap().0, 231);
+        // An unresolved element decoder cannot be treated as reading zero bytes.
+        command.vint(1).vint(0);
+        let bytes = command.into_bytes();
+        let mut input = bytes.as_slice();
+        assert!(decode(&mut input).is_none());
+        assert_eq!(input, bytes);
+    }
+
     #[test]
     fn primitives_and_bounds() {
         let fs: Vec<Field> = serde_json::from_value(json!([

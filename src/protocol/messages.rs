@@ -36,6 +36,110 @@ pub trait Message: Sized {
     }
 }
 
+/// 11489: requested farm name. The response type and body are unconfirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeHomeName(pub String);
+
+impl Message for ChangeHomeName {
+    const TYPE: u16 = 11489;
+    fn encode(&self, w: &mut Writer) {
+        w.string(&self.0);
+    }
+    fn decode(r: &mut Reader) -> Result<Self> {
+        let name = r.string()?.context("missing farm name")?;
+        ensure!(
+            !name.trim().is_empty() && !name.chars().any(char::is_control),
+            "invalid farm name"
+        );
+        Ok(Self(name))
+    }
+}
+
+/// The captured friend-ID list shared by 14690 and 17887.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FriendIdReport {
+    WithLanguage {
+        ids: Vec<u64>,
+        language: Option<String>,
+    },
+    WithFlag {
+        ids: Vec<u64>,
+        flag: bool,
+        trailing_id: u64,
+    },
+}
+
+impl FriendIdReport {
+    pub fn decode(kind: u16, body: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(body);
+        let count = usize::try_from(r.vint()?)?;
+        let size = count
+            .checked_mul(8)
+            .context("friend ID list size overflow")?;
+        let ids = r
+            .raw(size)?
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|&id| u64::from_be_bytes(id))
+            .collect();
+        let report = match kind {
+            14690 => Self::WithLanguage {
+                ids,
+                language: r.string()?,
+            },
+            17887 => Self::WithFlag {
+                ids,
+                flag: r.bool()?,
+                trailing_id: r.long()?,
+            },
+            _ => anyhow::bail!("unsupported friend ID report {kind}"),
+        };
+        r.finish()?;
+        Ok(report)
+    }
+}
+
+/// 20415: maintenance countdown in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaintenanceWarning(pub u32);
+
+impl Message for MaintenanceWarning {
+    const TYPE: u16 = 20415;
+    fn encode(&self, w: &mut Writer) {
+        w.int(self.0);
+    }
+    fn decode(r: &mut Reader) -> Result<Self> {
+        let seconds = r.int()?;
+        ensure!(
+            seconds <= i32::MAX as u32,
+            "maintenance seconds exceed int32"
+        );
+        Ok(Self(seconds))
+    }
+}
+
+/// 22220: only kinds 0 and 1 have been observed to be safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatSilenceNotice {
+    None,
+    Silenced,
+}
+
+impl Message for ChatSilenceNotice {
+    const TYPE: u16 = 22220;
+    fn encode(&self, w: &mut Writer) {
+        w.vint(u32::from(*self == Self::Silenced));
+    }
+    fn decode(r: &mut Reader) -> Result<Self> {
+        match r.vint()? {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Silenced),
+            kind => anyhow::bail!("unsupported chat silence notice kind {kind}"),
+        }
+    }
+}
+
 /// A message with no body (base decoder `0x615010`, or a wrapper decoder that
 /// reads nothing, such as 29997's `0x6efdd0`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -829,7 +933,13 @@ impl TurnCommand {
     }
     pub fn tick(&self) -> Option<u32> {
         let tick = match self {
-            Self::Schema { fields, .. } => i32::try_from(fields.last()?.as_i64()?).ok()?,
+            Self::Schema {
+                command_type,
+                fields,
+                ..
+            } => {
+                return crate::game::commands::tick(*command_type, fields);
+            }
             Self::Plant { tick, .. }
             | Self::Harvest { tick, .. }
             | Self::FollowUp22 { tick, .. }
@@ -841,93 +951,7 @@ impl TurnCommand {
         u32::try_from(tick).ok()
     }
     pub fn meaning(&self) -> &'static str {
-        match self.command_type() {
-            1 => "plant crop",
-            2 => "harvest crop",
-            3 => "move object",
-            6 => "tap animal enclosure (cosmetic)",
-            7 => "use field booster/tool",
-            8 => "buy field into storage",
-            11 => "upgrade storage/special building",
-            18 => "start obstacle clearing",
-            19 => "instant-complete obstacle clearing",
-            20 => "collect cleared obstacle",
-            30 => "expand roadside shop",
-            31 => "collect roadside sale",
-            32 => "list roadside goods",
-            36 => "advertise roadside stand",
-            37 => "discard roadside contents",
-            39 => "buy goods with diamonds",
-            42 => "tap ambient animal",
-            44 => "open mystery box",
-            45 => "discard mystery box",
-            47 => "buy from AI roadside shop",
-            49 => "set app rating state",
-            50 => "spawn ambient animal",
-            51 => "claim achievement",
-            52 => "buy advertisement token",
-            53 => "flip object",
-            55 => "complete boat order",
-            56 => "fill boat crate",
-            57 => "discard boat order",
-            58 => "speed up boat",
-            59 => "speed up tree/mine",
-            60 => "start tree regrowth/mine",
-            61 => "remove dead tree",
-            62 => "pick fruit/berry",
-            63 => "revive tree",
-            64 => "mine with tool",
-            65 | 66 => "request help/notification",
-            67 => "Facebook login reward",
-            68 => "hire Tom",
-            69 => "Tom state 13",
-            70 => "accept Tom offer",
-            71 => "send Tom to search",
-            72 => "reject Tom offer",
-            73 => "claim Tom goods",
-            74 => "Tom state 3",
-            86 => "feed pet",
-            87 => "collect/walk pet",
-            88 => "click pet (cosmetic)",
-            89 => "collect pet habitat",
-            90 => "unlock land area",
-            92 => "set Facebook requirement ignored",
-            93 => "collect/remove object",
-            94 => "offer-manager notification",
-            95 => "set Facebook ad clicked",
-            96 => "buy mastery star",
-            97 => "buy tool offer",
-            100 => "buy coin package",
-            101 => "store leaderboard hash",
-            103 => "gift card action",
-            131 => "toggle settings/notification bit",
-
-            28 => "complete truck order",
-            27 => "trash truck order",
-            29 => "speed up trashed-order timer",
-            33 => "acknowledge level-up unlocks",
-            40 => "complete visitor deal (bounded approximate offer)",
-            41 => "collect pending truck rewards",
-            4 => "buy/place object",
-            5 => "buy animal",
-            9 => "feed animal",
-            10 => "start production; auto-collect finished head first",
-            12 => "instant-complete production slot and auto-collect if storage allows",
-            13 => "collect finished product",
-            14 => "collect animal product",
-            15 => "instant-complete animal; collection is a later command 14",
-            16 => "instant-complete construction with flat diamond cost",
-            17 => "claim construction",
-            21 => "select animal in habitat UI (no persistent effect)",
-            22 => "harvest follow-up; no second credit",
-            23 => "clear harvested field",
-            24 => "crop ripe notice",
-            25 => "paint building part",
-            34 => "complete tutorial row",
-            35 => "start tutorial row (not persisted)",
-            43 => "decline visitor deal",
-            _ => crate::game::commands::evidence_name(self.command_type()),
-        }
+        crate::game::commands::name(self.command_type())
     }
     fn read(input: &mut &[u8]) -> Option<Self> {
         let (kind, fields, raw) = crate::game::commands::decode(input)?;
@@ -1231,6 +1255,26 @@ mod tests {
         assert!(FriendListRequest::from_bytes(&[]).is_ok());
         assert!(FriendListRequest::from_bytes(&[0]).is_err());
     }
+    #[test]
+    fn friend_reports_match_captured_layouts() {
+        let ids = vec![0x7fff_ffff_0000_0001, 0x7fff_ffff_0000_0002, 0x7fff_ffff_0000_0003];
+        let mut w = Writer::new();
+        w.vint(ids.len() as u32);
+        for &id in &ids {
+            w.long(id);
+        }
+        let mut request = w.clone();
+        request.string("EN");
+        let request = request.into_bytes();
+        assert_eq!(request.len(), 31);
+        assert_eq!(FriendIdReport::decode(14690, &request).unwrap(),
+            FriendIdReport::WithLanguage { ids: ids.clone(), language: Some("EN".into()) });
+        assert!(FriendIdReport::decode(14690, &request[..30]).is_err());
+        w.bool(true).long(0);
+        assert_eq!(FriendIdReport::decode(17887, &w.into_bytes()).unwrap(),
+            FriendIdReport::WithFlag { ids, flag: true, trailing_id: 0 });
+    }
+
     #[test]
     fn player_visit_matches_live_target_account_capture() {
         let bytes = [0, 0, 0, 0, 0, 0, 0, 0, 1];

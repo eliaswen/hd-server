@@ -13,18 +13,18 @@
 //! client and does not consume a nonce (LIVE_TEST_FEEDBACK.md §6).
 
 use crate::protocol::scframe::Frame;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 
 use crate::{
     protocol::crypto,
     protocol::{
-        catalogue,
+        Message, catalogue,
         messages::{
-            ids, AccountSummary, ClientHello, OtherDeviceConnected, EmptyFriendList, EndClientTurn,
-            EntityBatch, FriendListRequest, HomeSync, LoginOk, LoginOkTail, OptionalIdsReply,
-            OwnHomeData, PingReply, PostLoginReady, ServerHello, SessionReady, StatusNotice,
+            AccountSummary, ChangeHomeName, ChatSilenceNotice, ClientHello, EmptyFriendList,
+            EndClientTurn, EntityBatch, FriendIdReport, FriendListRequest, HomeSync, LoginOk,
+            LoginOkTail, MaintenanceWarning, OptionalIdsReply, OtherDeviceConnected, OwnHomeData,
+            PingReply, PostLoginReady, ServerHello, SessionReady, StatusNotice, ids,
         },
-        Message,
     },
 };
 
@@ -50,8 +50,9 @@ impl Outgoing {
     /// file), a minimal typed message by name
     /// (`session-ready`, `ping-reply`, `home-sync`, `entity-batch`,
     /// `optional-ids-reply`, `account-summary`, `own-home`), `notice:KIND:TEXT`
-    /// (StatusNotice, 20103) or `disconnect:REASON` (OtherDeviceConnected, 25892);
-    /// a trailing `!` corrupts the auth tag.
+    /// (20103), `disconnect:REASON` (25892), `maintenance:SECONDS` (20415),
+    /// `chat-silence` (22220), or `AREA@HOME_JSON` for a fishing/town snapshot.
+    /// A trailing `!` corrupts the auth tag.
     pub fn parse(spec: &str) -> Result<Self> {
         let (spec, corrupt) = match spec.strip_suffix('!') {
             Some(rest) => (rest, true),
@@ -69,6 +70,27 @@ impl Outgoing {
         };
         if let Some(out) = named {
             return Ok(Self { corrupt, ..out });
+        }
+        if spec == "chat-silence" {
+            return Ok(Self {
+                corrupt,
+                ..Self::new(&ChatSilenceNotice::Silenced)
+            });
+        }
+        if let Some(seconds) = spec.strip_prefix("maintenance:") {
+            let message = MaintenanceWarning(seconds.parse().context("maintenance seconds")?);
+            let out = Self::new(&message);
+            out.validate_body()?;
+            return Ok(Self { corrupt, ..out });
+        }
+        if let Some((area, path)) = spec.split_once('@') {
+            if let Some(area) = AreaSnapshot::from_name(area) {
+                let home = crate::game::home::HomeData::load(std::path::Path::new(path))?;
+                return Ok(Self {
+                    corrupt,
+                    ..area.snapshot(home)
+                });
+            }
         }
         if let Some(reason) = spec.strip_prefix("disconnect:") {
             let message = OtherDeviceConnected {
@@ -90,11 +112,13 @@ impl Outgoing {
         if let Some((ty, path)) = spec.split_once('@') {
             let msg_type: u16 = ty.trim().parse().context("message type")?;
             let body = std::fs::read(path).with_context(|| format!("reading body {path}"))?;
-            return Ok(Self {
+            let out = Self {
                 msg_type,
                 body,
                 corrupt,
-            });
+            };
+            out.validate_body()?;
+            return Ok(out);
         }
         let (ty, hex) = spec.split_once(':').unwrap_or((spec, ""));
         let msg_type: u16 = ty.trim().parse().context("message type")?;
@@ -104,11 +128,69 @@ impl Outgoing {
             .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
             .collect::<Result<_, _>>()
             .context("hex body")?;
-        Ok(Self {
+        let out = Self {
             msg_type,
             body,
             corrupt,
+        };
+        out.validate_body()?;
+        Ok(out)
+    }
+
+    fn validate_body(&self) -> Result<()> {
+        match self.msg_type {
+            ChatSilenceNotice::TYPE => {
+                ChatSilenceNotice::from_bytes(&self.body)?;
+            }
+            MaintenanceWarning::TYPE => {
+                MaintenanceWarning::from_bytes(&self.body)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AreaSnapshot {
+    OwnFishing = 22852,
+    OtherFishing = 28185,
+    OwnTown = 26650,
+    OtherTown = 26359,
+    AiTown = 28557,
+}
+
+impl AreaSnapshot {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "own-fishing" => Self::OwnFishing,
+            "other-fishing" => Self::OtherFishing,
+            "own-town" => Self::OwnTown,
+            "other-town" => Self::OtherTown,
+            "ai-town" => Self::AiTown,
+            _ => return None,
         })
+    }
+
+    fn snapshot(self, home: crate::game::home::HomeData) -> Outgoing {
+        // The area's blobs come from the provided file. The message ID selects
+        // the scene and the corresponding own/other avatar decoder.
+        let body = match self {
+            Self::OtherFishing | Self::OtherTown => crate::protocol::messages::OtherHomeData {
+                blobs: home.blobs(),
+            }
+            .to_bytes(),
+            Self::AiTown => crate::protocol::messages::AiHomeData {
+                blobs: home.blobs(),
+            }
+            .to_bytes(),
+            Self::OwnFishing | Self::OwnTown => home.message().to_bytes(),
+        };
+        Outgoing {
+            msg_type: self as u16,
+            body,
+            corrupt: false,
+        }
     }
 }
 
@@ -303,7 +385,18 @@ impl<'a> Session<'a> {
             ?previous,
             mode,
             replay_active = replay.is_some(),
-            "client entered mode; 1 is own farm, 3 is visiting, other meanings remain unknown"
+            area = match mode {
+                1 => "own farm",
+                2 => "other farm",
+                3 => "Greg's farm",
+                4 => "own fishing",
+                5 => "other fishing",
+                6 => "own town",
+                7 => "other town",
+                8 => "Greg's town",
+                _ => "unknown",
+            },
+            "client entered mode"
         );
     }
 
@@ -443,6 +536,20 @@ impl<'a> Session<'a> {
                 if frame.msg_type == 19838 {
                     FriendListRequest::from_bytes(&body)?;
                 }
+                if frame.msg_type == ChangeHomeName::TYPE {
+                    match ChangeHomeName::from_bytes(&body) {
+                        Ok(ChangeHomeName(name)) => {
+                            if let Some((store, account)) =
+                                self.config.accounts.as_ref().zip(self.account.as_ref())
+                            {
+                                store.rename_home(account.id, name)?;
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "ignoring malformed farm name request")
+                        }
+                    }
+                }
                 if frame.msg_type == 18485 {
                     let visit = crate::protocol::messages::VisitPlayer::from_bytes(&body)?;
                     tracing::info!(
@@ -451,7 +558,9 @@ impl<'a> Session<'a> {
                         "client entered player-farm visit mode; no 29950 response implemented"
                     );
                     if self.config.dev_friends {
-                        if let Some(action) = crate::game::dev_friends::action(visit.target_account_id) {
+                        if let Some(action) =
+                            crate::game::dev_friends::action(visit.target_account_id)
+                        {
                             let (store, account) = self
                                 .config
                                 .accounts
@@ -608,6 +717,30 @@ impl<'a> Session<'a> {
                             }
                         }
                     }
+                    14690 | 17887 => match FriendIdReport::decode(frame.msg_type, &body) {
+                        Ok(FriendIdReport::WithLanguage { ids, language }) => {
+                            tracing::debug!(
+                                friend_count = ids.len(),
+                                ?language,
+                                "decoded friend ID request"
+                            );
+                        }
+                        Ok(FriendIdReport::WithFlag {
+                            ids,
+                            flag,
+                            trailing_id,
+                        }) => {
+                            tracing::debug!(
+                                friend_count = ids.len(),
+                                flag,
+                                trailing_id,
+                                "decoded friend ID report"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::debug!(%error, "friend ID report differs from captured layout")
+                        }
+                    },
                     16368 => {
                         // The ID pair's account-versus-loaded-home scope remains
                         // unresolved. Preserve its bytes without inventing fields.
@@ -1946,6 +2079,14 @@ pub(crate) mod tests {
             .unwrap();
         let ready = session.handle(&ciphers.send(10366, &[])).unwrap();
         ciphers.receive(&ready.replies[0]);
+        let rename = ChangeHomeName("Orchard".into()).to_bytes();
+        let step = session
+            .handle(&ciphers.send(ChangeHomeName::TYPE, &rename))
+            .unwrap();
+        assert!(step.replies.is_empty());
+        session
+            .handle(&ciphers.send(ChangeHomeName::TYPE, &[0xff; 4]))
+            .unwrap();
         let first = crate::replay::tests::turn(304, &[]);
         session.handle(&ciphers.send(11292, &first)).unwrap();
         let offending =
@@ -1962,6 +2103,10 @@ pub(crate) mod tests {
             4
         );
 
+        assert_eq!(
+            store.home(account.account_id).unwrap().farm_name.as_deref(),
+            Some("Orchard")
+        );
         let text = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
         let warning = text
             .lines()
@@ -2146,5 +2291,35 @@ pub(crate) mod tests {
         assert_eq!(notice.body, StatusNotice::new(3, "hi").to_bytes());
         assert!(Outgoing::parse("29997:0").is_err());
         assert!(Outgoing::parse("x").is_err());
+        let warning = Outgoing::parse("maintenance:300").unwrap();
+        assert_eq!((warning.msg_type, warning.body), (20415, vec![0, 0, 1, 44]));
+        let warning = Outgoing::parse("chat-silence").unwrap();
+        assert_eq!((warning.msg_type, warning.body), (22220, vec![1]));
+        for bad in ["22220", "22220:02", "22220:03", "22220:0100"] {
+            assert!(Outgoing::parse(bad).is_err(), "{bad}");
+        }
+
+        let path = std::env::temp_dir().join(format!("hd-area-home-{}", std::process::id()));
+        let home = crate::game::home::HomeData::default();
+        crate::storage::accounts::atomic_json(&path, &home).unwrap();
+        for (area, kind) in [
+            ("own-fishing", 22852),
+            ("other-fishing", 28185),
+            ("own-town", 26650),
+            ("other-town", 26359),
+            ("ai-town", 28557),
+        ] {
+            let out = Outgoing::parse(&format!("{area}@{}", path.display())).unwrap();
+            assert_eq!(out.msg_type, kind);
+            let blobs = if matches!(kind, 28185 | 26359) {
+                crate::protocol::messages::OtherHomeData::from_bytes(&out.body)
+                    .unwrap()
+                    .blobs
+            } else {
+                OwnHomeData::from_bytes(&out.body).unwrap().blobs
+            };
+            assert_eq!(blobs, home.blobs());
+        }
+        std::fs::remove_file(path).unwrap();
     }
 }

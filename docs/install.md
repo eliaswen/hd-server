@@ -27,7 +27,9 @@ Run hd-dumper against your copy of the game and put its output in
 directory). The server loads each table from disk on first use and **fails to
 start if the directory is missing**.
 
-The directory is not part of this repository and is ignored by git.
+The directory is not part of this repository and is ignored by git. Refresh
+older reduced runtime tables with hd-dumper to get the full columns used by
+expansion, pet feeding, decoration pricing, and service upgrade replay.
 
 ## 3. Configure
 

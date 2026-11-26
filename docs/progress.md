@@ -17,6 +17,7 @@ The status of each part of the server for Hay Day 1.43.150 (build 1598).
 | Decrypt-failure reports from the client (10099) | 🟡 | Logged as an error, no action taken (no info on whether action should be taken) |
 | Idle connection timeout | ✅ | `idle_secs`, default 900 s |
 | Status notices (20103) | 🟡 | Builder exists; never sent automatically |
+| Maintenance warning (20415), chat silence (22220) | 🟡 | `maintenance:SECONDS` and `chat-silence` message specs; never sent automatically |
 | x86 client | ✅ | |
 | arm64-v8a client | ✅ | |
 | armeabi-v7a client | ❌ | No support planned for now, I don't have the hardware to test it + APK patching requires considerable work. |
@@ -31,7 +32,7 @@ The status of each part of the server for Hay Day 1.43.150 (build 1598).
 | Own farm loading (26017) | ✅ | Sent after PostLoginReady, default 7 s delay, can be safely be reduced (tested down to 100ms) |
 | Turn capture (11292) | ✅ | Every turn kept in `turns.jsonl` |
 | Turn acknowledgement (14102) | ❌ | Not needed by the client so far |
-| Command replay into the saved farm | 🟡 | About 60 of 304 command types, see below |
+| Command replay into the saved farm | 🟡 | About 80 of 304 command types, see below |
 | XP and levels | 🟡 | XP from replayed actions; `--xp`/`--level` session overrides |
 | Tutorial state | 🟡 | Can be marked done or partial for new accounts |
 | Coins and diamonds | 🟡 | Spent and earned by replayed commands; starting values configurable. Coins and diamonds are each one balance (FreeCash and FreeDiamonds are merged in, including in older saves) |
@@ -40,6 +41,7 @@ The status of each part of the server for Hay Day 1.43.150 (build 1598).
 | Multi-device support | ❌ | No way at the moment to authenticate multiple devices for the same account |
 | Disconnect message ("another device is connecting") (25892) | 🟡 | Builder exists; never sent automatically. Unlikely to be implemented soon due to the difficulty of having multi device support for one farm |
 | Flipping objects | ✅ | |
+| Farm name (11489) | 🟡 | Requested name saved to the account; not yet sent back in the avatar |
 
 ## Gameplay commands
 
@@ -55,25 +57,29 @@ saved farm. Unsupported commands are logged with a warning and skipped.
 | Animals (feed, collect, speed up) | ✅ | 9, 14, 15 | |
 | Production buildings | ✅ | 10, 12, 13 | |
 | Construction (speed up, claim) | ✅ | 16, 17 | |
-| Storage and building upgrades | 🟡 | 11 | |
+| Storage and building upgrades | 🟡 | 11 | Includes service building upgrades (slots, coin, XP and time bonuses) |
+| Field boosters, extra fields | 🟡 | 7, 8 | |
+| Land expansion | 🟡 | 90 | Expansion bits and pricing from the runtime tables |
 | Painting buildings | ✅ | 25 | |
 | Trees and bushes | 🟡 | 59–63 | Chop (61) consumes the tool and removes the tree; speed-up, regrow and fruit picking work. Revive (63) only counts the event; its cost and XP are unknown |
 | Rocks and forest obstacles | 🟡 | 18–20 | Clearing consumes the tool (Dynamite and similar), then a timer, speed-up and claim. The timer key the client uses is not confirmed |
 | Random drops | 🟡 | | Level-up goods are granted. Threshold rewards (for example the Axe at `RewardSetML2`) are not modeled. Mine ore, mystery box and collectible rewards are not rolled |
 | Truck orders | 🟡 | 27, 28, 29, 33, 41 | |
 | Visitors | 🟡 | 40 and related | Offers are approximated; tutorial visitors priced exactly, see [visitors](technical/visitors.md) |
-| Roadside shop | 🟡 | 30, 31, 32, 36, 37 | AI purchases recognized but not applied |
+| Roadside shop | 🟡 | 30, 31, 32, 36, 37, 52 | AI purchases (47) recognized but not applied |
 | Buying missing goods with diamonds | 🟡 | 39 | |
-| Mystery boxes | 🟡 | 44, 45 | |
+| Mystery boxes | 🟡 | 44, 45, 46, 48 | 44 grants a reward only when the save records one; 46 and 48 are logged |
 | Flipping objects | 🟡 | 53 | Persists mirrored orientation; live reconnect validation pending |
 | Mine | 🟡 | 64 | Consumes a tool; ore yields are not applied (they come from the client's shared RNG) |
-| Tom (hire, offers) | 🟡 | 68–74 | |
+| Tom (hire, offers) | 🟡 | 68–74 | Actions recorded; prices, timing and collected goods unresolved |
 | Train | 🟡 | 90 | |
-| Generic flags | 🟡 | 131 | |
-| Boat orders | ❌ | | |
-| Fishing, lobsters, ducks | ❌ | |
+| Generic flags | 🟡 | 49, 67, 92, 95, 101, 131 | App rating, login reward, ad and leaderboard flags |
+| Ambient animals | 🟡 | 50, 54 | Spawn and removal |
+| Achievements | 🟡 | 51 | |
+| Boat orders | 🟡 | 56, 57 | Crate and streak counters only; crate goods and rewards unavailable |
+| Fishing, lobsters, ducks | ❌ | | Area snapshots can be sent manually for protocol testing |
 | Town and town visitors | ❌ | | |
-| Pets, sanctuary | ❌ | | |
+| Pets, sanctuary | 🟡 | 86 | Pet feeding consumes food; pet state not modeled |
 | Gifting, in-app purchases | ❌ | | |
 | Layouts | ❌ | | |
 
@@ -96,8 +102,9 @@ This tables tracks the playability of the game. As the level increases, more fea
 | Friend list request (19838) | 🟡 | Empty list, a JSON file, or development entries |
 | Visiting Greg's AI farm (28383) | ✅ | Needs `resources/home-greg.json` |
 | Visiting another player's farm (29950) | ❌ | Request is decoded; no farm is returned |
-| Neighborhoods, chat, derby | ❌ | |
+| Neighborhoods, chat, derby | ❌ | Derby opt-in (211) is saved in replay metadata |
 | Push notification registration (19080) | ❌ | Ignored |
+| Friend ID reports (14690, 17887) | 🟡 | Decoded and logged |
 
 ## Other
 
@@ -110,6 +117,6 @@ This tables tracks the playability of the game. As the level increases, more fea
 
 ## Protocol coverage
 
-The client knows 237 message classes. 28 of them have a name and an
-established role; the rest are listed in [messages](technical/messages.md)
+The client knows 237 message classes. 88 of them have a name (from client
+decoder strings or observed behavior); the rest are listed in [messages](technical/messages.md)
 with whatever is known about them.

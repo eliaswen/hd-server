@@ -74,7 +74,7 @@ booster. The client saves `BoosterID` only when a booster is present
 Objects carry `"Mirrored": true` when flipped; the key is absent otherwise
 (Greg's farm uses it). Flipping swaps the footprint's width and height.
 
-## Mystery boxes (commands 44, 45, 48)
+## Mystery boxes (commands 44–46 and 48)
 
 - Class 53, data rows in `mystery_boxes.csv`; object ID = `5300000 + row`
   (Box1 = 5300000, a bronze box with 1 Bolt). Boxes are 2×2 tiles.
@@ -86,8 +86,11 @@ Objects carry `"Mirrored": true` when flipped; the key is absent otherwise
   avatar's `MysteryBoxRandomSeed`; the server does not simulate this, so a
   box spawned on the client is missing from the stored farm and command 44
   will not find it.
-- Current server behaviour (`src/replay/extended.rs`): 44 removes the box
-  without granting anything; 45 removes it.
+- Command 44 removes the box and grants its pre-rolled reward when the save
+  supplies `MysteryBoxReward: {"ID": ..., "Amount": ...}` in the corresponding
+  `replay_state.ObjectStates` entry. With no reward record it logs the missing
+  reward. Command 45 removes the box. Commands 46 and 48 log the unresolved
+  reveal steps.
 
 ### Finding the reward keys
 

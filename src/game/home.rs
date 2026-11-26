@@ -7,6 +7,9 @@ use std::{collections::BTreeMap, path::Path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HomeData {
+    /// Requested farm name. Its location in the outgoing avatar is unconfirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub farm_name: Option<String>,
     /// Server replay metadata for documented effects whose client JSON keys are unknown.
     #[serde(
         default = "empty_replay_state",
@@ -91,6 +94,7 @@ pub fn merge_free_balances(stats: &mut BTreeMap<u32, u32>) {
 impl HomeData {
     pub fn from_blobs([a, b, c]: [Value; 3]) -> Self {
         Self {
+            farm_name: None,
             replay_state: empty_replay_state(),
             order_board_unlocked: false,
             predefined_orders: 0,

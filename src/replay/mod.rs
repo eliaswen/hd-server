@@ -47,6 +47,16 @@ fn duration(row: &Row) -> Result<u32> {
         .and_then(|s| s.checked_add(number(row, "TimeSec").ok()?))
         .context("production duration overflow")
 }
+fn purchase_price(row: &Row, count: u32) -> Result<u32> {
+    let every = number(row, "DoPriceIncreaseEveryNObject")?;
+    let tiers = count.checked_div(every).unwrap_or(0);
+    let increase = tiers
+        .checked_mul(number(row, "PriceIncrease")?)
+        .context("tiered price overflow")?;
+    number(row, "Price")?
+        .checked_add(increase)
+        .context("price overflow")
+}
 fn remove(stats: &mut BTreeMap<u32, u32>, id: u32, amount: u32) -> Result<()> {
     let held = stats.get(&id).copied().unwrap_or(0);
     ensure!(
@@ -162,13 +172,13 @@ pub fn elapsed_home(mut home: HomeData, now: u64) -> HomeData {
     if let Some(saved) = home.timer_saved_at_ms {
         let ticks = now.saturating_sub(saved) / 66;
         if let Some(objects) = home.c.get_mut("Objects").and_then(Value::as_array_mut) {
+            let states = home.replay_state["ObjectStates"].as_array_mut();
+            let mut states = states.into_iter().flatten();
             for object in objects {
                 timers::advance_object(object, ticks);
-            }
-        }
-        if let Some(states) = home.replay_state["ObjectStates"].as_array_mut() {
-            for state in states {
-                timers::advance_state(state, ticks);
+                if let Some(state) = states.next() {
+                    timers::advance_state(object, state, ticks);
+                }
             }
         }
         home.timer_saved_at_ms = Some(saved.saturating_add(ticks * 66));
@@ -311,7 +321,7 @@ impl Replay {
         self.clock_tick = tick;
         for object in &mut self.objects {
             timers::advance_object(&mut object.value, elapsed);
-            timers::advance_state(&mut object.state, elapsed);
+            timers::advance_state(&mut object.value, &mut object.state, elapsed);
         }
     }
     fn create(&mut self, value: Value) -> Result<u32> {
@@ -647,7 +657,6 @@ impl Replay {
                             .iter()
                             .filter(|o| o.value["ID"] == id || o.value["TargetData"] == id)
                             .count() as u32;
-                        let every = number(row, "DoPriceIncreaseEveryNObject")?;
                         let mut obj = json!({"ID":id});
                         if *command_type == 4 {
                             ensure!(int(1)? == -1, "alternate placement mode unsupported");
@@ -656,9 +665,21 @@ impl Replay {
                                 "object position is not tile-aligned"
                             );
                             ensure!(
-                                [3, 4, 6, 11].contains(&(id / 100000)),
+                                [3, 4, 6, 11, 62, 79].contains(&(id / 100000)),
                                 "object purchase category unsupported"
                             );
+                            if id / 100000 == 62 {
+                                let fruit = tables()["fruits"]
+                                    .iter()
+                                    .find(|fruit| {
+                                        fruit.get("ProcessingBuilding") == row.get("Name")
+                                    })
+                                    .context("fruit tree has no crop definition")?;
+                                ensure!(
+                                    number(fruit, "UnlockLevel")? <= level,
+                                    "fruit tree locked at current level"
+                                );
+                            }
                             if let Some(column) =
                                 row.get("MaxHabitatsColumnName").filter(|s| !s.is_empty())
                             {
@@ -699,7 +720,7 @@ impl Replay {
                                 "alternate purchase flag unsupported"
                             );
                             // Duration from the building CSV is an  hypothesis.
-                            let seconds = duration(row)?;
+                            let seconds = if id / 100000 == 62 { 0 } else { duration(row)? };
                             if seconds > 0 {
                                 obj["ID"] = json!(construction_site(row)?);
                                 obj["TargetData"] = json!(id);
@@ -754,16 +775,23 @@ impl Replay {
                             obj["AnimalHabitatIndex"] = json!(habitat_index);
                             obj["Fed"] = json!(false);
                         }
-                        let price = number(row, "Price")?
-                            .checked_add(match count.checked_div(every) {
-                                None => 0,
-                                Some(tiers) => tiers
-                                    .checked_mul(number(row, "PriceIncrease")?)
-                                    .context("tiered price overflow")?,
-                            })
-                            .context("price overflow")?;
-                        spend(&mut home.avatar_stats, price)?;
-                        self.create(obj)?;
+                        if let Some(voucher) = row.get("Vouchers").filter(|name| !name.is_empty()) {
+                            let (id, _) = crate::game::starter::resolve(voucher)?;
+                            remove(&mut home.avatar_stats, id, number(row, "VoucherCount")?)?;
+                        }
+                        spend(&mut home.avatar_stats, purchase_price(row, count)?)?;
+                        if id / 100000 != 4 && row.contains_key("DiamondPrice") {
+                            spend_diamonds(&mut home.avatar_stats, number(row, "DiamondPrice")?)?;
+                        }
+                        let instance = self.create(obj)?;
+                        if id / 100000 == 62 {
+                            let i = self.position(i32::try_from(instance)?)?;
+                            let fruit_count = number(row, "FruitCount")? as usize;
+                            self.objects[i].state["Timer"] = timers::new(duration(row)?);
+                            self.objects[i].state["RefillFruits"] = json!(true);
+                            self.objects[i].value["Fruits"] = json!(vec![false; fruit_count]);
+                            self.unknown("fruit growth timer saved in replay metadata; client timer key unresolved");
+                        }
                         // : only decorations grant BuyExp on purchase;
                         // processing buildings grant ExpToBuild at claim instead.
                         if *command_type == 4 && id / 100000 == 3 && level < 700 {

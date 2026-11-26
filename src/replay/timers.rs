@@ -24,9 +24,18 @@ fn decrement(timer: &mut Value, elapsed: u64) {
         timer["TicksLeft"] = json!(left);
     }
 }
-pub(super) fn advance_state(state: &mut Value, elapsed: u64) {
+pub(super) fn advance_state(value: &mut Value, state: &mut Value, elapsed: u64) {
     if let Some(timer) = state.get_mut("Timer") {
         decrement(timer, elapsed);
+    }
+    if remaining(&state["Timer"]) > 0 || state["RefillFruits"] != true {
+        return;
+    }
+    if let Some(slots) = value["Fruits"].as_array_mut() {
+        slots.fill(json!(true));
+    }
+    if let Some(state) = state.as_object_mut() {
+        state.remove("RefillFruits");
     }
 }
 pub(super) fn advance_object(value: &mut Value, elapsed: u64) {
