@@ -40,7 +40,7 @@ pub(super) fn advance_state(value: &mut Value, state: &mut Value, elapsed: u64) 
 }
 pub(super) fn advance_object(value: &mut Value, elapsed: u64) {
     let kind = value["ID"].as_u64().unwrap_or(0) / 100000;
-    if kind == 13 {
+    if kind == 13 || kind == 4 {
         if let Some(timer) = value.get_mut("Timer") {
             decrement(timer, elapsed);
         }

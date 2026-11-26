@@ -36,7 +36,9 @@ booster. The client saves `BoosterID` only when a booster is present
 
 ## Crop fields (growth timer)
 
-Static analysis from round R39. Nothing in this section has been live-tested.
+Static analysis of the x86 APK. The server behaviour below has been
+live-tested: growth stays in sync across reconnects, and speed-up costs match
+the client.
 
 ### JSON format
 
@@ -53,8 +55,8 @@ optional `Mirrored` and `BoosterList`.
   clear. A field with no `Timer` is a finished (ripe) crop (High).
 - A missing `Timer`, a non-object `Timer`, or missing members all load as 0,
   which also means ripe (High).
-- The 66 ms tick conversion arithmetic is High confidence. The wall-clock rate
-  is Medium.
+- The 66 ms tick conversion was live-confirmed: server-simulated growth stays
+  in sync with the client.
 
 ```json
 {"ID":400001,"X":19,"Y":20,"Timer":{"StartSeconds":120,"TicksLeft":1818}}
@@ -88,20 +90,33 @@ data ID 400001 has not been independently confirmed.
 - The per-field update `0x169192` → `0x1f38a2` lowers the remaining ticks by a
   delta (High).
 - A bulk update chain (`0x4aae32` → … → `0x563ce4`) can also advance timers.
-  It is unknown whether a normal reconnect runs it, and with what delta
-  (Unknown).
+  The live test shows a normal reconnect does not apply offline time a second
+  time on top of the server's.
 
-The loader is built for "remaining ticks supplied by the server", so the
-server should apply offline catch-up itself:
+The loader expects the server to supply the remaining ticks, so the server
+applies offline catch-up itself (live-confirmed).
 
-1. Compute `remaining = TimeMin*60 + TimeSec - elapsed`.
-2. If `remaining > 0`, send
-   `Timer: {StartSeconds: duration, TicksLeft: remaining*1000/66}`.
-3. Otherwise, omit `Timer`.
+### Server behaviour (live-tested)
 
-Leaving `Timer` out of a growing crop makes it load as ripe. That is the
-current "crops are instantly grown upon reload" symptom. A live reconnect test
-is still needed, to rule out the client also applying elapsed time.
+- **Planting (command 1):** sets
+  `Timer: {StartSeconds: TimeMin*60 + TimeSec, TicksLeft: trunc(1000*s/66)}`.
+  The client's optional duration modifier is not modelled.
+- **Growth:** field timers advance with turn ticks during play, and with wall
+  time (`elapsed_home`) on load. A crop that reaches 0 loads as ripe.
+- **Speed-up (command 24):** costs diamonds, then removes `Timer`. The cost is
+  `ceil(InstantComplete * remaining_s / total_s)`, at least 1, and free below
+  level 3 (`FREE_DIAMOND_SPEED_UP_BEFORE_LEVEL`). This is the same formula as
+  for animals and production. The diamond balance matched the client's in a
+  live test. With too few diamonds the command is rejected and the timer
+  keeps running.
+- **Server already counts the crop as ripe:** when a speed-up or harvest
+  arrives and the server's timer has already run out, nothing is charged. A
+  warning is logged.
+- **Harvest before the server's timer ends:** the harvest is still credited,
+  because the client is authoritative. A warning reports the remaining ticks.
+- Fields planted before this change have no `Timer` and stay ripe.
+- Still not modelled: the client's optional duration modifier (possibly a
+  field booster). Boosted crops may grow at a different speed on the server.
 
 ## Truck order board (object 3200000)
 

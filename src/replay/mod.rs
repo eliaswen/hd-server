@@ -89,6 +89,33 @@ fn instant_cost(home: &HomeData, good: u32, timer: &Value) -> Result<u32> {
         .max(1);
     u32::try_from(cost).context("diamond cost overflow")
 }
+impl Replay {
+    /// Command 24 (analytics "Instant complete"): diamond speed-up of a growing
+    /// crop. Handler 0x16432a zeroes the field's TicksLeft. The cost uses the
+    /// shared InstantComplete formula; its use for crops is inferred.
+    fn instant_crop(&mut self, home: &mut HomeData, field: i32) -> Result<()> {
+        let i = self.position(field)?;
+        let o = &self.objects[i];
+        ensure!(o.instance / 100000 == 4, "crop speed-up requires a field");
+        let id = o.value["ID"].as_u64().unwrap_or(0) as u32;
+        ensure!(
+            id != 400000 && !o.harvested,
+            "crop speed-up requires a growing crop"
+        );
+        if timers::remaining(&o.value["Timer"]) == 0 {
+            self.warnings.push(format!(
+                "crop speed-up on field {field} that the server already counts as ripe; no diamonds charged"
+            ));
+            return Ok(());
+        }
+        let cost = instant_cost(home, id, &o.value["Timer"])?;
+        spend_diamonds(&mut home.avatar_stats, cost)?;
+        if let Some(value) = self.objects[i].value.as_object_mut() {
+            value.remove("Timer");
+        }
+        Ok(())
+    }
+}
 fn definition(id: u32) -> Result<&'static Row> {
     let table = type_tables()
         .get(&(id / 100000))
@@ -482,6 +509,14 @@ impl Replay {
                 }
                 let id = o.value["ID"].as_u64().unwrap() as u32;
                 ensure!(id != 400000, "cannot harvest empty field");
+                let left = timers::remaining(&o.value["Timer"]);
+                if left > 0 {
+                    // Client and server clocks can drift; the client is authoritative
+                    // for the harvest itself, so credit it and only report the gap.
+                    self.warnings.push(format!(
+                        "harvested field {object_id} with {left} server ticks of growth left"
+                    ));
+                }
                 let row = definition(id)?;
                 add(&mut home.avatar_stats, id, number(row, "Harvest")?)?;
                 award_xp(&mut home.avatar_stats, number(row, "ExpCollect")?)?;
@@ -516,7 +551,15 @@ impl Replay {
                 ensure!(quantity > 0, "no crop in silo for planting");
                 home.avatar_stats.insert(id, quantity - 1);
                 self.replace(i, id)?;
-                // The client permits writing crops back ripe until E4.
+                // Growth: TimeMin*60 + TimeSec seconds (0x4e31fe), as remaining
+                // 66 ms ticks. The client loads TicksLeft verbatim (0x44bfe4), so
+                // the timer advances here and in elapsed_home. The optional
+                // duration modifier the client applies is not modeled.
+                let timer = timers::new(duration(row)?);
+                let field = self.objects.last_mut().context("planted field missing")?;
+                if timer.is_object() {
+                    field.value["Timer"] = timer;
+                }
             }
             TurnCommand::Schema {
                 command_type,
@@ -590,7 +633,8 @@ impl Replay {
                     14 => self.collect_animal(home, int(0)?)?,
                     15 => self.instant_animal(home, int(0)?)?,
                     16 => self.instant_construction(home, int(0)?)?,
-                    21 | 24 => {}
+                    21 => {}
+                    24 => self.instant_crop(home, int(0)?)?,
                     25 => {
                         let i = self.position(int(0)?)?;
                         let id = u32::try_from(
@@ -889,7 +933,10 @@ pub(crate) mod tests {
             message
         );
         let json = serde_json::to_vec(&home).unwrap();
-        let mut reopened: HomeData = serde_json::from_slice(&json).unwrap();
+        let reopened: HomeData = serde_json::from_slice(&json).unwrap();
+        // Wheat takes 2 minutes; let it ripen offline before harvesting.
+        let saved = reopened.timer_saved_at_ms.unwrap();
+        let mut reopened = elapsed_home(reopened, saved + 120_000);
         let mut reconnect = Replay::new(&reopened).unwrap();
         assert!(apply(
             &mut reconnect,
@@ -900,6 +947,111 @@ pub(crate) mod tests {
         .is_empty());
         assert_eq!(reopened.avatar_stats[&400001], 8);
         assert_eq!(reopened.avatar_stats[&1900003], 5);
+    }
+    fn planted_wheat(home: &HomeData) -> Value {
+        let crops: Vec<_> = home.c["Objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o["ID"] == 400001)
+            .collect();
+        assert_eq!(crops.len(), 1);
+        crops[0].clone()
+    }
+    fn farm_with_planted_wheat(level: u32) -> (HomeData, Replay) {
+        let mut home = crate::game::starter::new_home().unwrap();
+        home.avatar_stats.insert(1900002, level);
+        home.avatar_stats.insert(1900001, 10);
+        home.avatar_stats.insert(400001, 5);
+        let mut state = Replay::new(&home).unwrap();
+        // Clearing starter field 400000 allocates empty field 400006.
+        let clear = [vec![2, 400000, 1], vec![22, 400000, 1], vec![23, 400000, 1]];
+        assert!(apply(&mut state, &mut home, 1, &clear).is_empty());
+        home.c["Objects"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|o| o["ID"] != 400001);
+        state = Replay::new(&home).unwrap();
+        let empty = state
+            .objects
+            .iter()
+            .rev()
+            .find(|o| o.value["ID"] == 400000)
+            .unwrap()
+            .instance;
+        assert!(apply(&mut state, &mut home, 2, &[vec![1, empty, 400001, 2]]).is_empty());
+        (home, state)
+    }
+    #[test]
+    fn planting_starts_growth_timer_that_turns_and_offline_time_advance() {
+        let (mut home, mut state) = farm_with_planted_wheat(1);
+        // Wheat: TimeMin 2 = 120 s = trunc(120000/66) ticks.
+        assert_eq!(
+            planted_wheat(&home)["Timer"],
+            json!({"StartSeconds":120,"TicksLeft":1818})
+        );
+        // 60 s of 30 Hz turn ticks = 909 timer ticks.
+        assert!(apply(&mut state, &mut home, 1802, &[]).is_empty());
+        assert_eq!(planted_wheat(&home)["Timer"]["TicksLeft"], 909);
+        let saved = home.timer_saved_at_ms.unwrap();
+        let later = elapsed_home(home.clone(), saved + 30_000);
+        assert_eq!(
+            planted_wheat(&later)["Timer"]["TicksLeft"],
+            909 - 30_000 / 66
+        );
+        let ripe = elapsed_home(home, saved + 120_000);
+        assert!(!ripe.c["Objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["ID"] == 400001 && timers::remaining(&o["Timer"]) > 0));
+    }
+    #[test]
+    fn crop_speed_up_costs_diamonds_from_level_three() {
+        for (level, diamonds) in [(2, 10), (3, 9)] {
+            let (mut home, mut state) = farm_with_planted_wheat(level);
+            let field = state
+                .objects
+                .iter()
+                .find(|o| o.value["ID"] == 400001)
+                .unwrap()
+                .instance;
+            // Half grown: ceil(InstantComplete 1 * 60 s / 120 s) = 1 diamond.
+            assert!(apply(&mut state, &mut home, 1802, &[vec![24, field, 1802]]).is_empty());
+            assert_eq!(home.avatar_stats[&1900001], diamonds);
+            assert!(planted_wheat(&home).get("Timer").is_none());
+            assert!(apply(&mut state, &mut home, 1803, &[vec![2, field, 1803]]).is_empty());
+            // 5 + 2 from clearing the starter field - 1 planted + 2 harvested.
+            assert_eq!(home.avatar_stats[&400001], 8);
+        }
+    }
+    #[test]
+    fn crop_speed_up_without_diamonds_is_rejected() {
+        let (mut home, mut state) = farm_with_planted_wheat(3);
+        home.avatar_stats.insert(1900001, 0);
+        let field = state
+            .objects
+            .iter()
+            .find(|o| o.value["ID"] == 400001)
+            .unwrap()
+            .instance;
+        let notes = apply(&mut state, &mut home, 1802, &[vec![24, field, 1802]]);
+        assert!(notes[0].contains("insufficient diamonds"));
+        assert!(timers::remaining(&planted_wheat(&home)["Timer"]) > 0);
+    }
+    #[test]
+    fn early_harvest_is_credited_with_a_warning() {
+        let (mut home, mut state) = farm_with_planted_wheat(1);
+        let field = state
+            .objects
+            .iter()
+            .find(|o| o.value["ID"] == 400001)
+            .unwrap()
+            .instance;
+        let notes = apply(&mut state, &mut home, 100, &[vec![2, field, 100]]);
+        assert!(notes[0].contains("growth left"), "{notes:?}");
+        // 5 + 2 from clearing the starter field - 1 planted + 2 harvested.
+        assert_eq!(home.avatar_stats[&400001], 8);
     }
     #[test]
     fn harvest_is_credited_once_even_across_interrupted_clear() {

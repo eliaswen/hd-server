@@ -25,7 +25,7 @@ pub fn name(kind: u32) -> &'static str {
         21 => "select animal in habitat (UI)",
         22 => "Harvest follow-up",
         23 => "Clear harvested field",
-        24 => "crop ripe notification",
+        24 => "instant-complete crop",
         25 => "Paint building part",
         26 => "order board action (take / complete order)",
         27 => "Trash truck order",
