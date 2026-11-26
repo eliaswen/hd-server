@@ -213,6 +213,22 @@ pub fn elapsed_home(mut home: HomeData, now: u64) -> HomeData {
     home
 }
 
+/// Development action: run every server-simulated object timer to completion
+/// (crops, animals, construction, production queues, order slots and object
+/// state timers such as fruit-tree refills). Visitor spawning is not touched.
+pub fn finish_timers(home: &mut HomeData) {
+    if let Some(objects) = home.c.get_mut("Objects").and_then(Value::as_array_mut) {
+        let states = home.replay_state["ObjectStates"].as_array_mut();
+        let mut states = states.into_iter().flatten();
+        for object in objects {
+            timers::advance_object(object, u64::MAX);
+            if let Some(state) = states.next() {
+                timers::advance_state(object, state, u64::MAX);
+            }
+        }
+    }
+}
+
 /// Base XP rollover and level rewards. Threshold bonuses remain unmodeled
 /// but must not prevent the documented base XP or its ordinary rewards.
 pub fn award_xp(stats: &mut BTreeMap<u32, u32>, amount: u32) -> Result<()> {
@@ -1005,6 +1021,51 @@ pub(crate) mod tests {
             .unwrap()
             .iter()
             .any(|o| o["ID"] == 400001 && timers::remaining(&o["Timer"]) > 0));
+    }
+    #[test]
+    fn finish_timers_completes_crops_animals_and_production() {
+        let (mut home, _) = farm_with_planted_wheat(3);
+        home.avatar_stats
+            .extend([(400001, 20), (400002, 10), (1900015, 0)]);
+        let objects = home.c["Objects"].as_array_mut().unwrap();
+        for o in objects.iter_mut() {
+            if o["ID"] == 2100003 {
+                o["ID"] = json!(1100000);
+                o.as_object_mut().unwrap().remove("TargetData");
+            }
+        }
+        objects.extend([
+            json!({"ID":1300000,"X":14,"Y":22,"AnimalHabitatIndex":0,"Fed":false}),
+            json!({"ID":600000,"X":25,"Y":25}),
+            json!({"ID":600001,"X":28,"Y":25}),
+        ]);
+        let mut state = Replay::new(&home).unwrap();
+        // Feed chicken 1300000; start chicken feed (1600000) in feed mill 600001.
+        let start = [vec![9, 1300000, 3], vec![10, 1600000, 600001, 3]];
+        let notes = apply(&mut state, &mut home, 3, &start);
+        assert!(notes.is_empty(), "{notes:?}");
+        let running = |home: &HomeData| {
+            home.c["Objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|o| timers::has_running(o))
+                .count()
+        };
+        assert_eq!(running(&home), 3);
+        finish_timers(&mut home);
+        assert_eq!(running(&home), 0);
+        assert!(timers::remaining(&planted_wheat(&home)["Timer"]) == 0);
+        // The skipped state replays cleanly: harvest and collect without warnings.
+        let mut state = Replay::new(&home).unwrap();
+        let field = state
+            .objects
+            .iter()
+            .find(|o| o.value["ID"] == 400001)
+            .unwrap()
+            .instance;
+        let collect = [vec![2, field, 4], vec![14, 1300000, 4], vec![13, 600001, 4]];
+        assert!(apply(&mut state, &mut home, 4, &collect).is_empty());
     }
     #[test]
     fn crop_speed_up_costs_diamonds_from_level_three() {

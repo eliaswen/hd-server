@@ -48,5 +48,6 @@ storage_backend = "file"
 # A missing file disables Greg visits.
 
 # Development controls in the friends bar: reset the account, add gold and
-# diamonds, or skip the tutorial. For local testing only. Off by default.
+# diamonds, skip the tutorial, or finish every running timer. For local
+# testing only. Off by default.
 dev_friends = false

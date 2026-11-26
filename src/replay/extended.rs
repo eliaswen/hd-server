@@ -204,10 +204,7 @@ impl Replay {
                     let id = item[0].as_u64().context("invalid item")? as u32;
                     let amount = u32::try_from(item[1].as_i64().context("invalid amount")?)?;
                     ensure!((1..20_000_000).contains(&amount), "invalid purchase amount");
-                    let row = definition(id)?;
-                    ensure!(row.contains_key("DiamondPrice"), "diamond price unresolved for data ID {id}");
-                    let unit = number(row, "DiamondPrice")?;
-                    ensure!(unit > 0, "no diamond purchase price for data ID {id}");
+                    let unit = buy_goods_unit_price(definition(id)?)?;
                     cost = cost.checked_add(amount.checked_mul(unit).context("price overflow")?).context("price overflow")?;
                 }
                 spend_diamonds(&mut home.avatar_stats, cost)?;
@@ -619,6 +616,20 @@ impl Replay {
     }
 }
 
+/// Command 39 (LogicBuyGoodsWithDiamondsCommand) unit price, per the data-item
+/// constructor 0x323846 and pricer 0x4cfe2c (static, R40): `OrderValue` when
+/// positive, otherwise `DiamondPrice`, otherwise 0; then at least 1. No level
+/// discount and no context-dependent price; each item costs `amount * unit`.
+fn buy_goods_unit_price(row: &Row) -> Result<u32> {
+    let order_value = number(row, "OrderValue")?;
+    let unit = if order_value > 0 {
+        order_value
+    } else {
+        number(row, "DiamondPrice")?
+    };
+    Ok(unit.max(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +644,33 @@ mod tests {
                 },
             )
             .unwrap();
+    }
+    #[test]
+    fn buy_goods_price_prefers_order_value_then_diamond_price() {
+        let price = |id| buy_goods_unit_price(definition(id).unwrap()).unwrap();
+        assert_eq!(price(1500001), 6); // Milk: OrderValue 6, no DiamondPrice.
+        assert_eq!(price(1600000), 2); // Chicken Food: no OrderValue, DiamondPrice 2.
+        assert_eq!(price(400001), 1); // Wheat: both 1.
+    }
+    #[test]
+    fn buy_missing_milk_costs_six_per_unit() {
+        let mut home = crate::game::starter::new_home().unwrap();
+        home.avatar_stats.insert(1900001, 18);
+        let mut state = Replay::new(&home).unwrap();
+        run(
+            &mut state,
+            &mut home,
+            39,
+            vec![
+                json!([[1500001, 2]]),
+                json!(-26),
+                json!(-1),
+                json!(-1),
+                json!(1),
+            ],
+        );
+        assert_eq!(home.avatar_stats[&1900001], 6);
+        assert_eq!(home.avatar_stats[&1500001], 2);
     }
     #[test]
     fn _buy_goods_decoder_keeps_list_pairs_and_signed_context() {

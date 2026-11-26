@@ -177,6 +177,12 @@ impl Store {
                 home.validate()?;
                 backend.save_home(id, &home)?;
             }
+            crate::game::dev_friends::Action::SkipTimers => {
+                let mut home = backend.load_home(id)?;
+                crate::replay::finish_timers(&mut home);
+                home.validate()?;
+                backend.save_home(id, &home)?;
+            }
             crate::game::dev_friends::Action::SkipTutorial => {
                 let mut home = backend.load_home(id)?;
                 home.tutorial_words =

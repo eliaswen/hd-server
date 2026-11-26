@@ -67,7 +67,7 @@ saved farm. Unsupported commands are logged with a warning and skipped.
 | Truck orders | 🟡 | 27, 28, 29, 33, 41 | |
 | Visitors | 🟡 | 40 and related | Offers are approximated; tutorial visitors priced exactly, see [visitors](technical/visitors.md) |
 | Roadside shop | 🟡 | 30, 31, 32, 36, 37, 52 | AI purchases (47) recognized but not applied |
-| Buying missing goods with diamonds | 🟡 | 39 | |
+| Buying missing goods with diamonds | 🟡 | 39 | Priced as the client does (`OrderValue`, else `DiamondPrice`, at least 1). Goods are credited to storage; special delivery contexts are not modelled |
 | Mystery boxes | 🟡 | 44, 45, 46, 48 | 44 grants a reward only when the save records one; 46 and 48 are logged |
 | Flipping objects | 🟡 | 53 | Persists mirrored orientation; live reconnect validation pending |
 | Mine | 🟡 | 64 | Consumes a tool; ore yields are not applied (they come from the client's shared RNG) |
@@ -113,7 +113,7 @@ This tables tracks the playability of the game. As the level increases, more fea
 | Serving game assets | ❌ | The client keeps its bundled assets; `asset_url` is only advertised |
 | Admin HTTP API | 🟡 | List accounts, read turns, replace a farm |
 | Traffic captures and decrypted transcripts | ✅ | `dumps/server/` |
-| Development friends (reset, resources, skip tutorial) | 🟡 | Off by default |
+| Development friends (reset, resources, skip tutorial, skip timers) | 🟡 | Off by default |
 
 ## Protocol coverage
 
