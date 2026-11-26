@@ -1,5 +1,5 @@
 //! Optional, bounded HTTP/1 admin listener. One request per connection.
-use crate::{game::home::HomeData, storage::accounts::Store};
+use crate::{game::home::HomeData, storage::Store};
 use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -196,7 +196,7 @@ mod tests {
     }
     #[tokio::test]
     async fn admin_routes() {
-        let (store, dir) = crate::storage::accounts::test_store("admin");
+        let (store, dir) = crate::storage::test_store("admin");
         let account = store.login(&[0; 12]).unwrap();
         let (code, list) = request(store.clone(), "GET", "/accounts", b"").await;
         assert_eq!(code, 200);

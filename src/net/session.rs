@@ -199,7 +199,7 @@ pub struct Config {
     pub account_id: u64,
     pub pass_token: String,
     /// Persistent runtime identity; None keeps explicit isolated test configs.
-    pub accounts: Option<std::sync::Arc<crate::storage::accounts::Store>>,
+    pub accounts: Option<std::sync::Arc<crate::storage::Store>>,
     /// Use the account's current stored home instead of an explicit experiment list.
     pub account_home: bool,
     pub replay_commands: bool,
@@ -345,7 +345,7 @@ enum State {
 pub struct Session<'a> {
     config: &'a Config,
     state: State,
-    account: Option<crate::storage::accounts::Account>,
+    account: Option<crate::storage::Account>,
     replay: Option<crate::replay::Replay>,
     // The client retains its own world while visiting. Without a resent 26017,
     // returning must resume these serials, not invent a fresh loaded world.
@@ -1100,7 +1100,7 @@ pub(crate) mod tests {
         use crate::protocol::messages::VisitPlayer;
         for enabled in [false, true] {
             for target in [RESET_ID, RESOURCES_ID, 77] {
-                let (store, dir) = crate::storage::accounts::test_store("development-friends");
+                let (store, dir) = crate::storage::test_store("development-friends");
                 let cfg = Config {
                     accounts: Some(store.clone()),
                     dev_friends: enabled,
@@ -1187,7 +1187,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn _trash_skip_unlock_and_visitor_registration_on_encrypted_session() {
-        let (store, dir) = crate::storage::accounts::test_store("-orders");
+        let (store, dir) = crate::storage::test_store("-orders");
         let cfg = Config {
             accounts: Some(store.clone()),
             account_home: true,
@@ -1260,7 +1260,7 @@ pub(crate) mod tests {
     fn _orders_are_sent_replayed_and_reloaded_without_login_rewrite() {
         use crate::protocol::messages::OwnHomeData;
         for delay in [0, 7000] {
-            let (store, dir) = crate::storage::accounts::test_store("-orders");
+            let (store, dir) = crate::storage::test_store("-orders");
             let cfg = Config {
                 accounts: Some(store.clone()),
                 account_home: true,
@@ -1338,7 +1338,7 @@ pub(crate) mod tests {
             drop(cfg);
             drop(store);
             let reopened =
-                crate::storage::accounts::Store::open(dir.join("accounts.json"), initial).unwrap();
+                crate::storage::open_file(dir.join("accounts.json"), initial).unwrap();
             assert_eq!(reopened.home(account.account_id).unwrap(), stored);
             std::fs::remove_dir_all(dir).unwrap();
         }
@@ -1346,7 +1346,7 @@ pub(crate) mod tests {
     #[test]
     fn _encrypted_feed_produce_and_offline_reload_then_collect() {
         for delay in [0, 7000] {
-            let (store, dir) = crate::storage::accounts::test_store("-timers");
+            let (store, dir) = crate::storage::test_store("-timers");
             let cfg = Config {
                 accounts: Some(store.clone()),
                 account_home: true,
@@ -1426,7 +1426,7 @@ pub(crate) mod tests {
             drop(session);
             drop(cfg);
             drop(store);
-            let reopened = crate::storage::accounts::Store::open(
+            let reopened = crate::storage::open_file(
                 dir.join("accounts.json"),
                 crate::game::starter::new_home().unwrap(),
             )
@@ -1439,7 +1439,7 @@ pub(crate) mod tests {
     #[test]
     fn encrypted_replay_persists_and_reinitializes_after_home_reload() {
         for delay in [0, 7000] {
-            let (store, dir) = crate::storage::accounts::test_store("encrypted-replay");
+            let (store, dir) = crate::storage::test_store("encrypted-replay");
             let cfg = Config {
                 accounts: Some(store.clone()),
                 account_home: true,
@@ -1507,7 +1507,7 @@ pub(crate) mod tests {
             drop(session);
             drop(cfg);
             drop(store);
-            let reopened = crate::storage::accounts::Store::open(
+            let reopened = crate::storage::open_file(
                 dir.join("accounts.json"),
                 crate::game::starter::new_home().unwrap(),
             )
@@ -1519,7 +1519,7 @@ pub(crate) mod tests {
 
     #[test]
     fn raw_home_override_records_commands_without_mutating_account() {
-        let (store, dir) = crate::storage::accounts::test_store("raw-read-only");
+        let (store, dir) = crate::storage::test_store("raw-read-only");
         let cfg = Config {
             accounts: Some(store.clone()),
             account_home: false,
@@ -1566,7 +1566,7 @@ pub(crate) mod tests {
                 tutorial_words: None,
             },
         ] {
-            let (store, dir) = crate::storage::accounts::test_store("session");
+            let (store, dir) = crate::storage::test_store("session");
             let config = Config {
                 accounts: Some(store.clone()),
                 account_home: true,
@@ -1657,7 +1657,7 @@ pub(crate) mod tests {
 
     #[test]
     fn delayed_progress_uses_current_account_home_without_writing_it() {
-        let (store, dir) = crate::storage::accounts::test_store("delayed-progress");
+        let (store, dir) = crate::storage::test_store("delayed-progress");
         let config = Config {
             accounts: Some(store.clone()),
             account_home: true,
@@ -1785,7 +1785,7 @@ pub(crate) mod tests {
     #[test]
     fn _friend_request_preserves_replay_and_return_without_snapshot_resumes_serials() {
         use crate::protocol::messages::AiHomeData;
-        let (store, dir) = crate::storage::accounts::test_store("-mode");
+        let (store, dir) = crate::storage::test_store("-mode");
         let ai = AiHomeData {
             blobs: OwnHomeData::default().blobs,
         };
@@ -2059,7 +2059,7 @@ pub(crate) mod tests {
         assert!(text.contains("complete tutorial row"));
         // The second turn is deliberately not INFO-sampled. Its warning must
         // still identify the offending 11292, command, tick, and exact body.
-        let (store, dir) = crate::storage::accounts::test_store("warning-context");
+        let (store, dir) = crate::storage::test_store("warning-context");
         let config = Config {
             accounts: Some(store.clone()),
             account_home: true,
@@ -2301,7 +2301,7 @@ pub(crate) mod tests {
 
         let path = std::env::temp_dir().join(format!("hd-area-home-{}", std::process::id()));
         let home = crate::game::home::HomeData::default();
-        crate::storage::accounts::atomic_json(&path, &home).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&home).unwrap()).unwrap();
         for (area, kind) in [
             ("own-fishing", 22852),
             ("other-fishing", 28185),

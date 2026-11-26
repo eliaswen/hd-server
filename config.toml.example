@@ -31,6 +31,10 @@ after_ready_delay_ms = 7000
 # Idle timeout for a game connection, in seconds.
 idle_secs = 900
 
+# Account storage backend. "file" uses the JSON account index (data/accounts.json by default).
+# Override with --storage-backend.
+storage_backend = "file"
+
 # Starting HUD balances for NEW accounts only. Omit to use the built-in values.
 # cash and diamonds set the total balances (starter FreeCash/FreeDiamonds are merged in).
 # cash = 350

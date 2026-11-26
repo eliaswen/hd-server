@@ -19,6 +19,8 @@ pub struct FileConfig {
     #[serde(alias = "home_delay_ms")]
     pub after_ready_delay_ms: Option<u64>,
     pub idle_secs: Option<u64>,
+    #[serde(default)]
+    pub storage_backend: crate::storage::BackendKind,
     pub accounts_file: Option<PathBuf>,
     pub friends_file: Option<PathBuf>,
     pub dev_friends: Option<bool>,

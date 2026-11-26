@@ -269,11 +269,11 @@ mod tests {
             messages::{OwnHomeData, VisitPlayer},
             Message,
         };
-        let (old_store, dir) = crate::storage::accounts::test_store("tcp-reset");
+        let (old_store, dir) = crate::storage::test_store("tcp-reset");
         drop(old_store);
         let initial = crate::game::starter::new_home().unwrap();
         let store = std::sync::Arc::new(
-            crate::storage::accounts::Store::open(dir.join("accounts.json"), initial.clone()).unwrap(),
+            crate::storage::open_file(dir.join("accounts.json"), initial.clone()).unwrap(),
         );
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap())

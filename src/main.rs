@@ -47,6 +47,9 @@ struct Args {
     /// Console verbosity; overrides TOML log_level and RUST_LOG.
     #[arg(long, value_parser = ["off", "error", "warn", "info", "debug", "trace"])]
     log_level: Option<String>,
+    /// Account storage backend. Overrides the TOML storage_backend setting.
+    #[arg(long, value_enum, default_value_t = storage::BackendKind::default())]
+    storage_backend: storage::BackendKind,
     /// JSON account index; per-account files live beside it in <id>/.
     #[arg(long, default_value = "data/accounts.json")]
     accounts_file: PathBuf,
@@ -189,6 +192,9 @@ impl Args {
         }
         merge!(key_file, file.key_file);
         merge!(dump_dir, file.dump_dir);
+        if !explicit("storage_backend") {
+            self.storage_backend = file.storage_backend;
+        }
         merge!(accounts_file, file.accounts_file);
         merge!(after_ready_delay_ms, file.after_ready_delay_ms);
         merge!(idle_secs, file.idle_secs);
@@ -552,10 +558,10 @@ async fn main() -> Result<()> {
     // Validate the starter and every existing account before opening listeners.
     // Overrides are applied to message copies, never to the store's initializer.
     progress.apply(initial_home.message())?;
-    let store = Arc::new(storage::accounts::Store::open(
-        args.accounts_file.clone(),
-        initial_home,
-    )?);
+    let store = Arc::new(
+        args.storage_backend
+            .open(args.accounts_file.clone(), initial_home)?,
+    );
     store.validate_progress(progress)?;
     let admin_listener = if args.admin && !args.no_admin {
         Some(TcpListener::bind(net::admin::address(&args.admin_listen, args.admin_insecure)?).await?)
@@ -802,6 +808,7 @@ dump_dir = "file-dumps"
 login_ok_tail = "trimmed"
 home_delay_ms = 7500
 idle_secs = 1800
+storage_backend = "file"
 accounts_file = "data/test-accounts.json"
 starter_home_file = "home-starter.json"
 admin_enabled = true
@@ -827,6 +834,7 @@ xp = 30
         assert_eq!(args.after_ready_delay_ms, 7500);
         assert_eq!(args.idle_secs, 1800);
         assert!(args.admin);
+        assert_eq!(args.storage_backend, storage::BackendKind::File);
         assert_eq!(args.accounts_file, PathBuf::from("data/test-accounts.json"));
         let matches = Args::command()
             .try_get_matches_from([
@@ -841,6 +849,8 @@ xp = 30
                 "7000",
                 "--idle-secs",
                 "900",
+                "--storage-backend",
+                "file",
                 "--accounts-file",
                 "data/cli.json",
                 "--level",
@@ -863,6 +873,7 @@ xp = 30
         assert_eq!(args.idle_secs, 900);
         assert!(args.no_admin);
         assert!(!args.admin);
+        assert_eq!(args.storage_backend, storage::BackendKind::File);
         assert_eq!(args.accounts_file, PathBuf::from("data/cli.json"));
         for (flag, value, expected) in [
             ("--xp", "0", (Some(5), Some(0))),
@@ -883,6 +894,13 @@ xp = 30
         }
         std::fs::write(&path, "unknown_key = true").unwrap();
         assert!(config::settings::FileConfig::load(&path).is_err());
+        std::fs::write(&path, "storage_backend = 'sqlite'").unwrap();
+        let error = config::settings::FileConfig::load(&path).err().unwrap();
+        assert!(format!("{error:#}").contains("unknown variant `sqlite`"));
+        let error = Args::try_parse_from(["hd-server", "--storage-backend", "sqlite"])
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
         std::fs::remove_file(path).unwrap();
     }
 
