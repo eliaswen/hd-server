@@ -1,0 +1,32 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Tests read the game data tables in resources/, which are never committed
+# (see LEGAL.md). The job runs on a self-hosted runner that holds a Hay Day
+# 1.43.150 x86 APK (path in the runner's HD_APK variable) and generates the
+# tables from it with hd-dumper on every run.
+jobs:
+  test:
+    runs-on: [self-hosted, linux]
+    # Self-hosted runners must not run code from fork PRs.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: hd-server
+      - uses: actions/checkout@v4
+        with:
+          repository: eliaswen/hd-dumper
+          path: hd-dumper
+      - name: Generate resources
+        working-directory: hd-dumper
+        run: |
+          test -f "${HD_APK:?set HD_APK on the runner}"
+          cargo run --release --locked -- --apk "$HD_APK" --out ../hd-server/resources --require-complete
+      - name: Test
+        working-directory: hd-server
+        run: cargo test --locked
