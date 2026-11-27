@@ -1,6 +1,6 @@
 [package]
 name = "hd-server"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "A custom server for Hay Day 1.43.150: HTTP bootstrap, encrypted login and farm state"
