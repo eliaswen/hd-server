@@ -106,14 +106,22 @@ This tables tracks the playability of the game. As the level increases, more fea
 | Push notification registration (19080) | ❌ | Ignored |
 | Friend ID reports (14690, 17887) | 🟡 | Decoded and logged |
 
+## Custom server specific features
+
+| Feature | Status | Notes |
+| --- | :---: | --- |
+| Traffic captures and decrypted transcripts | ✅ | `dumps/server/` |
+| Development friends (reset, resources, skip tutorial, skip timers) | 🟡 | More planned |
+| Admin HTTP API | 🟡 | List accounts, read turns, replace a farm |
+| Admin Web UI | ❌ | Plan to have a web ui to view accounts and manage users |
+| Seperate storage backends | ❌ | Foundations laid, no other storage backend for now |
+
 ## Other
 
 | Feature | Status | Notes |
 | --- | :---: | --- |
 | Serving game assets | ❌ | The client keeps its bundled assets; `asset_url` is only advertised |
-| Admin HTTP API | 🟡 | List accounts, read turns, replace a farm |
-| Traffic captures and decrypted transcripts | ✅ | `dumps/server/` |
-| Development friends (reset, resources, skip tutorial, skip timers) | 🟡 | Off by default |
+
 
 ## Protocol coverage
 
