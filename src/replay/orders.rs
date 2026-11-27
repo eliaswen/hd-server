@@ -39,6 +39,10 @@ struct Resource {
     oe: i64,
     ul: u32,
 }
+pub(super) fn preload() {
+    resources();
+}
+
 fn resources() -> &'static [Resource] {
     static DATA: OnceLock<Vec<Resource>> = OnceLock::new();
     DATA.get_or_init(|| {

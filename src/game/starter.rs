@@ -11,6 +11,12 @@ pub struct Table {
     kind: u32,
     rows: Vec<BTreeMap<String, String>>,
 }
+/// Parse the cached tables now (see `Server::start`).
+pub(crate) fn preload() {
+    tables();
+    layout();
+}
+
 pub fn tables() -> &'static Vec<Table> {
     static DATA: OnceLock<Vec<Table>> = OnceLock::new();
     DATA.get_or_init(|| {

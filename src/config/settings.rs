@@ -15,6 +15,8 @@ pub struct FileConfig {
     pub asset_url: Option<String>,
     pub key_file: Option<PathBuf>,
     pub dump_dir: Option<PathBuf>,
+    /// `false` records no connection captures (`--no-dump`).
+    pub dump_enabled: Option<bool>,
     pub login_ok_tail: Option<String>,
     #[serde(alias = "home_delay_ms")]
     pub after_ready_delay_ms: Option<u64>,

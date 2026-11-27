@@ -29,6 +29,11 @@ pub struct Overrides {
 
 // XP thresholds transcribed from the target APK's CSV tables.
 // Read the reduced table at runtime so it stays out of the executable.
+/// Parse the cached tables now (see `Server::start`).
+pub(crate) fn preload() {
+    requirements();
+}
+
 fn requirements() -> &'static [u32] {
     static TABLE: OnceLock<Vec<u32>> = OnceLock::new();
     TABLE.get_or_init(|| {

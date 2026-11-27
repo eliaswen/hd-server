@@ -11,6 +11,10 @@ resources_dir = "resources"
 # Console detail: off, error, warn, info, debug or trace.
 log_level = "info"
 
+# Record every game connection in dumps/server/ (raw bytes and a decrypted
+# transcript). Captures are never deleted; set false to turn them off.
+# dump_enabled = true
+
 # HTTP bootstrap listener. Use 0.0.0.0:8080 to accept connections from a device.
 http_listen = "127.0.0.1:8080"
 

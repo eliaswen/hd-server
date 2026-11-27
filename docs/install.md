@@ -40,8 +40,9 @@ With the packages, the steps below become: generate resources into
 
 Run hd-dumper against your copy of the game and put its output in
 `resources/` (or set `resources_dir` to another path, relative to the working
-directory). The server loads each table from disk on first use and **fails to
-start if the directory is missing**.
+directory). The server reads and checks every table when it starts, and
+**fails to start if the directory or any table is missing or unreadable**,
+naming the files to regenerate.
 
 The directory is not part of this repository and is ignored by git. Refresh
 older reduced runtime tables with hd-dumper to get the full columns used by

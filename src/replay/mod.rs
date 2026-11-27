@@ -17,6 +17,16 @@ mod timers;
 mod visitors;
 
 type Row = BTreeMap<String, String>;
+/// Parse every cached replay table now (see `Server::start`).
+pub(crate) fn preload() {
+    tables();
+    type_tables();
+    replay_config();
+    extended::preload();
+    orders::preload();
+    visitors::preload();
+}
+
 fn tables() -> &'static BTreeMap<String, Vec<Row>> {
     static DATA: OnceLock<BTreeMap<String, Vec<Row>>> = OnceLock::new();
     DATA.get_or_init(|| {

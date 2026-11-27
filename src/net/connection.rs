@@ -23,12 +23,17 @@ use crate::{
 
 pub const MAX_PAYLOAD: usize = 1024 * 1024;
 
+/// A connection's capture files; [`Dumps::disabled`] records nothing.
 pub struct Dumps {
+    files: Option<Files>,
+    start: Instant,
+    scenario: String,
+}
+
+struct Files {
     c2s: File,
     s2c: File,
     plain: File,
-    start: Instant,
-    scenario: String,
 }
 
 impl Dumps {
@@ -44,19 +49,41 @@ impl Dumps {
                 .await
         }
         Ok(Self {
-            c2s: open(stem, "-c2s.bin").await?,
-            s2c: open(stem, "-s2c.bin").await?,
-            plain: open(stem, "-plain.jsonl").await?,
+            files: Some(Files {
+                c2s: open(stem, "-c2s.bin").await?,
+                s2c: open(stem, "-s2c.bin").await?,
+                plain: open(stem, "-plain.jsonl").await?,
+            }),
             start: Instant::now(),
             scenario: scenario.into(),
         })
     }
 
+    /// Record nothing.
+    pub fn disabled() -> Self {
+        Self {
+            files: None,
+            start: Instant::now(),
+            scenario: String::new(),
+        }
+    }
+
+    async fn capture_c2s(&mut self, bytes: &[u8]) -> Result<()> {
+        if let Some(files) = &mut self.files {
+            files.c2s.write_all(bytes).await?;
+        }
+        Ok(())
+    }
+
     async fn line(&mut self, mut value: serde_json::Value) -> Result<()> {
+        let Some(files) = &mut self.files else {
+            return Ok(());
+        };
         value["time"] = json!(chrono::Utc::now().to_rfc3339());
         value["t_ms"] = json!(self.start.elapsed().as_millis() as u64);
         value["scenario"] = json!(self.scenario);
-        self.plain
+        files
+            .plain
             .write_all(format!("{value}\n").as_bytes())
             .await?;
         Ok(())
@@ -86,16 +113,20 @@ impl Dumps {
 
     async fn send(&mut self, stream: &mut TcpStream, record: &Record, frame: &Frame) -> Result<()> {
         let wire = frame.to_wire();
-        self.s2c.write_all(&wire).await?;
+        if let Some(files) = &mut self.files {
+            files.s2c.write_all(&wire).await?;
+        }
         stream.write_all(&wire).await?;
         tracing::debug!(direction="s2c",label=%catalogue::label(frame.msg_type),wire_bytes=wire.len(),body_bytes=record.body.len(),"server message written to TCP socket and capture");
         self.record(record).await
     }
 
     async fn flush(&mut self) -> Result<()> {
-        self.c2s.flush().await?;
-        self.s2c.flush().await?;
-        self.plain.flush().await?;
+        if let Some(files) = &mut self.files {
+            files.c2s.flush().await?;
+            files.s2c.flush().await?;
+            files.plain.flush().await?;
+        }
         Ok(())
     }
 }
@@ -131,7 +162,7 @@ pub async fn serve(mut stream: TcpStream, mut dumps: Dumps, config: &Config) -> 
             if n == 0 {
                 break;
             }
-            dumps.c2s.write_all(&chunk[..n]).await?;
+            dumps.capture_c2s(&chunk[..n]).await?;
             total += n;
             if framing {
                 pending.extend_from_slice(&chunk[..n]);

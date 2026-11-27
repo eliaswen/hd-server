@@ -1,10 +1,16 @@
 //! Partial-effect replay. Unknown sub-effects warn; known effects commit.
 use super::*;
-fn stat(name: &str) -> Result<u32> {
+fn ids() -> &'static BTreeMap<String, u32> {
     static IDS: OnceLock<BTreeMap<String, u32>> = OnceLock::new();
     IDS.get_or_init(|| {
         serde_json::from_str(&crate::data::resource_data::load("money-ids.json")).unwrap()
     })
+}
+pub(super) fn preload() {
+    ids();
+}
+fn stat(name: &str) -> Result<u32> {
+    ids()
     .get(name)
     .copied()
     .with_context(|| format!("unknown money row {name}"))

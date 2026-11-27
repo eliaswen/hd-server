@@ -14,6 +14,11 @@ struct Field {
     #[serde(default)]
     fields: Vec<Field>,
 }
+/// Parse the cached tables now (see `Server::start`).
+pub(crate) fn preload() {
+    schema();
+}
+
 fn schema() -> &'static BTreeMap<String, Vec<Field>> {
     static DATA: OnceLock<BTreeMap<String, Vec<Field>>> = OnceLock::new();
     DATA.get_or_init(|| {

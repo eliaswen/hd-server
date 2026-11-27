@@ -99,6 +99,16 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
+          # Command-line builds for Android (Termux, adb shell). Apps link the
+          # library instead.
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+            archive: tar.gz
+            android_abi: arm64-v8a
+          - target: x86_64-linux-android
+            os: ubuntu-latest
+            archive: tar.gz
+            android_abi: x86_64
     defaults:
       run:
         shell: bash
@@ -126,8 +136,23 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cargo-ndk
+        if: matrix.android_abi
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          ANDROID_ABI: ${{ matrix.android_abi }}
+        run: |
+          if [[ -n "$ANDROID_ABI" ]]; then
+            # The hosted runners ship an NDK; API 24 is Android 7.0.
+            export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+            cargo ndk -t "$ANDROID_ABI" -P 24 build --release --locked
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
 
       - name: Package
         env:

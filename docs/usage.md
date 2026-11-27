@@ -26,6 +26,7 @@ paths are resolved from the working directory.
 | `replay_commands` | `--replay-commands` | `false` | Opt existing farms into command replay |
 | `admin_enabled` | `--admin` / `--no-admin` | `false` | Admin API |
 | `admin_listen` | `--admin-listen` | `127.0.0.1:8081` | Admin listener |
+| `dump_enabled` | `--no-dump` | `true` | Record every game connection (see [Captures](#captures)) |
 
 ### New-account options
 
@@ -161,7 +162,9 @@ sampled.
 
 ## Captures
 
-Every game connection is recorded in `dumps/server/` (`--dump-dir`):
+Every game connection is recorded in `dumps/server/` (`--dump-dir`), unless
+`--no-dump` (or `dump_enabled = false`) is set. Captures are never deleted, so
+turn them off where storage is tight, such as on a phone:
 
 | File | Contents |
 | --- | --- |

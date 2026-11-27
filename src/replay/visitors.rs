@@ -29,6 +29,11 @@ struct Resource {
     ov: u32,
     ul: u32,
 }
+pub(super) fn preload() {
+    resources();
+    config();
+}
+
 fn resources() -> &'static Vec<Resource> {
     static R: OnceLock<Vec<Resource>> = OnceLock::new();
     R.get_or_init(|| {
