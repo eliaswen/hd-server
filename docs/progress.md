@@ -115,13 +115,13 @@ This tables tracks the playability of the game. As the level increases, more fea
 | Admin HTTP API | 🟡 | List accounts, read turns, replace a farm |
 | Admin Web UI | ❌ | Plan to have a web ui to view accounts and manage users |
 | Seperate storage backends | ❌ | Foundations laid, no other storage backend for now |
+| Windows support | ❌ | Only Unix-like systems supported |
 
 ## Other
 
 | Feature | Status | Notes |
 | --- | :---: | --- |
 | Serving game assets | ❌ | The client keeps its bundled assets; `asset_url` is only advertised |
-
 
 ## Protocol coverage
 
