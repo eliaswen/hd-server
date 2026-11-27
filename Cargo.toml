@@ -7,7 +7,7 @@ description = "A custom server for Hay Day 1.43.150: HTTP bootstrap, encrypted l
 
 [dependencies]
 anyhow = "1.0.105"
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.6.10", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "fs", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -20,7 +20,7 @@ blake2 = "0.11"
 x25519-dalek = "3"
 poly1305 = "0.9"
 getrandom = "0.4"
-toml = "1"
+toml = "1.2.3"
 
 [package.metadata.deb]
 maintainer = "Elias Wendland <193786789+eliaswen@users.noreply.github.com>"
