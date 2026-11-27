@@ -52,7 +52,6 @@ jobs:
       contents: read
     outputs:
       is_release: ${{ steps.release_commit.outputs.is_release }}
-      is_prerelease: ${{ steps.release_commit.outputs.is_prerelease }}
       version: ${{ steps.release_commit.outputs.version }}
 
     steps:
@@ -76,11 +75,6 @@ jobs:
 
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "version=${version}" >> "$GITHUB_OUTPUT"
-            if [[ "${version%%.*}" -eq 0 ]]; then
-              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-            fi
           fi
 
   build:
@@ -202,19 +196,11 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # PACKAGE_SIGNING_KEY: an ASCII-armored private key without a passphrase,
-      # dedicated to package signing (not a personal key).
+      # A key dedicated to package signing, not a personal one.
       - name: Import signing key
-        env:
-          SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
-        run: |
-          if [[ -z "$SIGNING_KEY" ]]; then
-            echo "::error::Set the PACKAGE_SIGNING_KEY secret to sign packages"
-            exit 1
-          fi
-          gpg --batch --import <<< "$SIGNING_KEY"
-          fingerprint="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
-          echo "SIGNING_KEY_ID=$fingerprint" >> "$GITHUB_ENV"
+        uses: ./.github/actions/import-signing-key
+        with:
+          key: ${{ secrets.PACKAGE_SIGNING_KEY }}
 
       - name: Sign RPMs
         run: |
@@ -268,16 +254,11 @@ jobs:
             exit 0
           fi
 
-          prerelease=()
-          if [[ "${{ needs.release_metadata.outputs.is_prerelease }}" == "true" ]]; then
-            prerelease+=(--prerelease)
-          fi
-
           gh release create "$VERSION" \
             --target "$GITHUB_SHA" \
             --title "Release $VERSION" \
             --notes-file release-notes.md \
-            "${prerelease[@]}" \
+            --latest \
             dist/*
 
   # Rebuilds the whole apt and dnf repository from the .deb and .rpm assets of
@@ -307,6 +288,10 @@ jobs:
         shell: bash
 
     steps:
+      # For the local import-signing-key action.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
@@ -316,17 +301,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y apt-utils createrepo-c
 
+      # A key dedicated to package signing, not a personal one.
       - name: Import signing key
-        env:
-          SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
-        run: |
-          if [[ -z "$SIGNING_KEY" ]]; then
-            echo "::error::Set the PACKAGE_SIGNING_KEY secret to sign the repository"
-            exit 1
-          fi
-          gpg --batch --import <<< "$SIGNING_KEY"
-          fingerprint="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
-          echo "SIGNING_KEY_ID=$fingerprint" >> "$GITHUB_ENV"
+        uses: ./.github/actions/import-signing-key
+        with:
+          key: ${{ secrets.PACKAGE_SIGNING_KEY }}
 
       - name: Download packages from every release
         run: |

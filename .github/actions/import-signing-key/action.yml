@@ -1,0 +1,51 @@
+name: Import signing key
+description: Import the package signing key into gpg and export its fingerprint as SIGNING_KEY_ID.
+
+inputs:
+  key:
+    description: >-
+      OpenPGP private key without a passphrase, as `gpg --armor --export-secret-keys`
+      prints it (or that output, or a binary export, base64-encoded).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Import signing key
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.key }}
+      run: |
+        fail() {
+          echo "::error::PACKAGE_SIGNING_KEY $1"
+          exit 1
+        }
+        [[ -n "$SIGNING_KEY" ]] || fail "is not set, so packages cannot be signed."
+
+        key_file="$RUNNER_TEMP/signing-key"
+        trap 'rm -f "$key_file" "$key_file.decoded"' EXIT
+        printf '%s\n' "$SIGNING_KEY" > "$key_file"
+        if ! grep -q -- '-----BEGIN' "$key_file" && base64 -d "$key_file" > "$key_file.decoded" 2>/dev/null; then
+          mv "$key_file.decoded" "$key_file"
+        fi
+
+        # Name the problem without printing any of the secret.
+        packets="$(gpg --batch --list-packets "$key_file" 2>/dev/null || true)"
+        if ! grep -q '^:secret key packet:' <<< "$packets"; then
+          if grep -q '^:public key packet:' <<< "$packets"; then
+            fail "holds a public key. Store the private key: gpg --armor --export-secret-keys <fingerprint>"
+          elif grep -qE -- '-----BEGIN (OPENSSH|RSA|EC|ENCRYPTED)? ?PRIVATE KEY-----' "$key_file"; then
+            fail "holds an SSH or PEM key, not an OpenPGP key. Generate one with gpg --quick-gen-key."
+          else
+            fail "is not an OpenPGP private key. Store the output of: gpg --armor --export-secret-keys <fingerprint>"
+          fi
+        fi
+
+        gpg --batch --import "$key_file" || fail "could not be imported by gpg (see the log above)."
+        fingerprint="$(gpg --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+        [[ -n "$fingerprint" ]] || fail "imported no secret key."
+        if ! echo check | gpg --batch --pinentry-mode error --local-user "$fingerprint" --clearsign > /dev/null 2>&1; then
+          fail "cannot sign without a passphrase. Use a dedicated key that has none."
+        fi
+        echo "Imported signing key $fingerprint"
+        echo "SIGNING_KEY_ID=$fingerprint" >> "$GITHUB_ENV"
