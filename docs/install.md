@@ -11,7 +11,7 @@
   so it connects to this server.
 - A device or emulator that can reach the machine running the server.
 
-## 1. Build
+## 1. Build or install
 
 ```sh
 cargo build --release
@@ -19,6 +19,22 @@ cargo build --release
 
 The binary is `target/release/hd-server`. Run `hd-server --help` for every
 option.
+
+Each [release](https://github.com/eliaswen/hd-server/releases) also has
+archives for Linux and macOS, and deb and rpm packages are served from a signed
+apt and dnf repository; [eliaswen.github.io/hd-server](https://eliaswen.github.io/hd-server/)
+has the setup commands. The packages install:
+
+- the `hd-server.service` systemd unit, which is **not enabled or started**
+  until you set it up;
+- the configuration as `/etc/hd-server/config.toml`, kept across upgrades;
+- a state directory, `/var/lib/hd-server`, that the service runs from, so
+  `resources/`, `data/` and `dumps/` live there.
+
+With the packages, the steps below become: generate resources into
+`/var/lib/hd-server/resources`, edit `/etc/hd-server/config.toml`, run
+`sudo systemctl enable --now hd-server`, and read the public key with
+`journalctl -u hd-server`.
 
 ## 2. Generate `resources/`
 

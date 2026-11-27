@@ -1,5 +1,7 @@
 # Copy to config.toml and run from the repository root:
 #   cargo run -- --config config.toml
+# The deb and rpm packages install this file as /etc/hd-server/config.toml
+# and run the server from /var/lib/hd-server.
 # Explicit CLI options override the corresponding settings here.
 # Relative paths are resolved from the working directory.
 

@@ -21,3 +21,35 @@ x25519-dalek = "3"
 poly1305 = "0.9"
 getrandom = "0.4"
 toml = "1"
+
+[package.metadata.deb]
+maintainer = "Elias Wendland <193786789+eliaswen@users.noreply.github.com>"
+copyright = "Elias Wendland"
+section = "games"
+depends = "$auto"
+extended-description = """\
+Runs as the hd-server systemd unit, which is installed but not enabled. \
+Generate /var/lib/hd-server/resources with hd-dumper and review \
+/etc/hd-server/config.toml before starting it."""
+maintainer-scripts = "packaging/"
+systemd-units = { enable = false, start = false }
+assets = [
+    ["target/release/hd-server", "usr/bin/", "755"],
+    ["config.toml.example", "etc/hd-server/config.toml", "644"],
+    ["README.md", "usr/share/doc/hd-server/", "644"],
+    ["LEGAL.md", "usr/share/doc/hd-server/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/hd-server", dest = "/usr/bin/hd-server", mode = "755" },
+    { source = "config.toml.example", dest = "/etc/hd-server/config.toml", mode = "644", config = "noreplace" },
+    { source = "packaging/hd-server.service", dest = "/usr/lib/systemd/system/hd-server.service", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/hd-server/README.md", mode = "644", doc = true },
+    { source = "LEGAL.md", dest = "/usr/share/doc/hd-server/LEGAL.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/hd-server/LICENSE", mode = "644", doc = true },
+]
+post_install_script = "systemctl daemon-reload >/dev/null 2>&1 || :"
+pre_uninstall_script = "if [ $1 -eq 0 ]; then systemctl --no-reload disable --now hd-server.service >/dev/null 2>&1 || :; fi"
+# On upgrade ($1 >= 1), restart a running server onto the new binary.
+post_uninstall_script = "systemctl daemon-reload >/dev/null 2>&1 || :; if [ $1 -ge 1 ]; then systemctl try-restart hd-server.service >/dev/null 2>&1 || :; fi"

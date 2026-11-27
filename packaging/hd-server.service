@@ -1,0 +1,28 @@
+[Unit]
+Description=Hay Day custom server
+Documentation=https://github.com/eliaswen/hd-server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Relative paths in the config (resources/, data/, dumps/) resolve from the
+# state directory, /var/lib/hd-server.
+ExecStart=/usr/bin/hd-server --config /etc/hd-server/config.toml
+WorkingDirectory=/var/lib/hd-server
+StateDirectory=hd-server
+DynamicUser=yes
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
